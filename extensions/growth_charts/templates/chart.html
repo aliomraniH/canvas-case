@@ -1,382 +1,467 @@
 <!DOCTYPE html>
 <style>
-  .container {
-    width: 700px;
+  .cm-container {
+    width: 760px;
     margin: 20px auto;
     font-family: Lato, 'Helvetica Neue', Arial, Helvetica, sans-serif;
+    color: #1f2933;
   }
-  .buttonWrapper {
+  .cm-header {
     display: flex;
     justify-content: space-between;
-    margin-bottom: 20px;
+    align-items: baseline;
+    margin-bottom: 8px;
   }
-  .button {
-    padding: 10px 25px;
-    background-color: #3b8fcf;
-    color: #fff;
-    font-weight: bold;
-    border: none;
-    border-radius: 4px;
-  }
-  .button:hover {
-    cursor: pointer;
-    background-color: #0f619f;
-  }
-  .category {
-    overflow: auto;
-  }
-  .hidden {
-    display: none;
-  }
-  .titleWrapper {
-    display: flex;
-    justify-content: center;
-    margin-bottom: 20px;
-  }
-  .title {
-    font-size: 20px;
-    font-weight: bold;
-  }
-  .graphContainer {
-    margin: 20px 0;
-    padding: 20px;
+  .cm-title { font-size: 20px; font-weight: bold; }
+  .cm-subtitle { font-size: 13px; color: #66707a; }
+  .cm-chart-card {
+    padding: 16px;
     border: 1px solid #d4d4d4;
-    border-radius: 4px;
+    border-radius: 6px;
   }
-  @media print {
-    .pageBreak {
-      page-break-after: always;
-    }
+  .cm-hint { font-size: 11px; color: #99a3ad; margin-top: 6px; }
+
+  /* Diagnostics overlay (hidden until Shift+D) */
+  #cm-diagnostics {
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    max-height: 80vh;
+    overflow: auto;
+    width: 360px;
+    background: rgba(17, 24, 33, 0.95);
+    color: #d7f5e9;
+    font-family: 'SFMono-Regular', Consolas, monospace;
+    font-size: 11px;
+    padding: 12px 14px;
+    border-radius: 6px;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.4);
+    z-index: 9999;
   }
+  #cm-diagnostics.cm-hidden { display: none; }
+  #cm-diagnostics h3 { margin: 0 0 8px; font-size: 12px; color: #9bd1fa; }
+  #cm-diagnostics table { width: 100%; border-collapse: collapse; }
+  #cm-diagnostics td { padding: 2px 4px; vertical-align: top; }
+  #cm-diagnostics td.k { color: #f797b9; white-space: nowrap; padding-right: 10px; }
 </style>
-<div id="container" class="container">
-  <div class="buttonWrapper">
-    <div id="categories">
-      <button class="button" onclick="onWHOClick()">WHO</button>
-      <button class="button" onclick="onCDCClick()">CDC</button>
-    </div>
-    <div>
-      <button class="button" onclick="onLbsClick()">lbs/inches</button>
-      <button class="button" onclick="onKgClick()">kg/cm</button>
-    </div>
-    <button class="button" onclick="printGraphs()">Print</button>
+
+<div id="cm-container" class="cm-container">
+  <div class="cm-header">
+    <div class="cm-title">Weight Trajectory</div>
+    <div class="cm-subtitle">% total body weight loss (TBWL) vs. baseline</div>
   </div>
-
-  <!-- WHO tab -->
-  <div id="WHO" class="category">
-    <h1>WHO Child Growth Standards</h1>
-
+  <div class="cm-chart-card">
+    <div id="cm-chart"></div>
+    <div class="cm-hint">Hover a point for details. Press <strong>Shift+D</strong> for diagnostics.</div>
   </div>
-
-  <!-- CDC tab -->
-  <div id="CDC" class="category hidden">
-    <h1>CDC Growth Chart</h1>
-
-  </div>
-
 </div>
+
+<div id="cm-diagnostics" class="cm-hidden">
+  <h3>Pipeline Diagnostics</h3>
+  <table id="cm-diagnostics-body"></table>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
 <script>
-
-const chartSize = {
-  width: 700,
-  height: 450,
-  marginTop: 20,
-  marginRight: 40,
-  marginBottom: 30,
-  marginLeft: 30,
+// ───────────────────────────────────────────────────────────────
+// Shared chart geometry
+// ───────────────────────────────────────────────────────────────
+const CM_SIZE = {
+  width: 700, height: 420,
+  marginTop: 24, marginRight: 70, marginBottom: 40, marginLeft: 56,
 };
 
-const unitsTypes = {
-  LBS: "lbs",
-  KG: "kg"
+// Shared rendering context populated by ChartScaffold.init()
+const CM = {
+  svg: null,
+  x: null,        // time scale (calendar date)
+  y: null,        // linear scale (weight lbs)
+  config: null,
+};
+
+function cmParseDate(value) {
+  // date_obj is serialized by Django as an ISO string
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? null : d;
 }
 
-const dataTypes = {
-  Weight: "Weight",
-  Length: "Length",
-  Generic: "Generic"
-}
+// ───────────────────────────────────────────────────────────────
+// DiagnosticsPanel — defined FIRST so every component can record
+// timestamps during its own init()/render().
+// ───────────────────────────────────────────────────────────────
+const DiagnosticsPanel = {
+  timestamps: {},
+  _visible: false,
 
-function convertValues(value, type, unit) {
-  const conversionFactors = {
-    [unitsTypes.LBS]: {
-      [dataTypes.Weight]: 2.20462,
-      [dataTypes.Length]: 0.393701,
-      [dataTypes.Generic]: 1,
-    },
-    [unitsTypes.KG]: {
-      [dataTypes.Weight]: 1,
-      [dataTypes.Length]: 1,
-      [dataTypes.Generic]: 1,
-    },
-  };
+  recordTimestamp(component, ts) {
+    this.timestamps[component] = ts;
+    if (this._visible) this.render();
+  },
 
-  return value * conversionFactors[unit][type];
-}
+  render() {
+    const body = document.getElementById('cm-diagnostics-body');
+    if (!body) return;
+    const rows = Object.entries(this.timestamps)
+      .map(([k, v]) => `<tr><td class="k">${k}</td><td>${v}</td></tr>`)
+      .join('');
+    body.innerHTML = rows;
+  },
 
-function unitsLabel(unit, type) {
-  if (type === dataTypes.Generic) {
-    return "";
-  }
+  toggle() {
+    this._visible = !this._visible;
+    const panel = document.getElementById('cm-diagnostics');
+    if (!panel) return;
+    panel.classList.toggle('cm-hidden', !this._visible);
+    if (this._visible) this.render();
+  },
+};
 
-  return unit === unitsTypes.LBS
-    ? type === dataTypes.Weight
-      ? "(lbs)"
-      : "(inches)"
-    : type === dataTypes.Weight
-    ? "(kg)"
-    : "(cm)";
-}
+// ───────────────────────────────────────────────────────────────
+// 1. ChartScaffold — SVG canvas + axes. Runs first.
+// ───────────────────────────────────────────────────────────────
+const ChartScaffold = {
+  _data: null,
+  _loadedAt: null,
+  _isInitialized: false,
 
-function createChart({ data, layerData, xType, yType, xLabel, yLabel }, units) {
-  const dataValues = data.map((d) => ({
-    x: convertValues(d.x, xType, units),
-    y: convertValues(d.y, yType, units),
-    z: d.z,
-  }));
+  init(config) {
+    CM.config = config || {};
+    this._data = config || {};
+    this._isInitialized = true;
+    this._loadedAt = new Date().toISOString();
+    console.log(`[ChartScaffold] init() at ${this._loadedAt}`);
 
-  const layerValues = layerData.map((d) => ({
-    x: convertValues(d.x, xType, units),
-    y: convertValues(d.y, yType, units),
-  }));
+    const mount = document.getElementById('cm-chart');
+    mount.innerHTML = '';
 
-  // Create the positional scales.
-  const x = d3
-    .scaleLinear()
-    .domain(d3.extent(dataValues, (d) => d.x))
-    .range([chartSize.marginLeft, chartSize.width - chartSize.marginRight]);
+    CM.svg = d3.create('svg')
+      .attr('width', CM_SIZE.width)
+      .attr('height', CM_SIZE.height)
+      .attr('viewBox', [0, 0, CM_SIZE.width, CM_SIZE.height])
+      .attr('style', 'max-width: 100%; height: auto; overflow: visible; font-size: 12px;');
 
-  const y = d3
-    .scaleLinear()
-    .domain(d3.extent(dataValues, (d) => d.y))
-    .nice()
-    .range([chartSize.height - chartSize.marginBottom, chartSize.marginTop]);
+    // Scales start empty; render(data) sets their domains.
+    CM.x = d3.scaleTime().range([CM_SIZE.marginLeft, CM_SIZE.width - CM_SIZE.marginRight]);
+    CM.y = d3.scaleLinear().range([CM_SIZE.height - CM_SIZE.marginBottom, CM_SIZE.marginTop]);
 
-  // Create the SVG container.
-  const svg = d3
-    .create("svg")
-    .attr("width", chartSize.width)
-    .attr("height", chartSize.height)
-    .attr("viewBox", [0, 0, chartSize.width, chartSize.height])
-    .attr(
-      "style",
-      "max-width: 100%; height: auto; overflow: visible; font-size: 14px;"
-    );
+    CM.svg.append('g').attr('class', 'cm-x-axis')
+      .attr('transform', `translate(0,${CM_SIZE.height - CM_SIZE.marginBottom})`);
+    CM.svg.append('g').attr('class', 'cm-y-axis')
+      .attr('transform', `translate(${CM_SIZE.marginLeft},0)`);
 
-  // Add the horizontal axis.
-  svg
-    .append("g")
-    .attr(
-      "transform",
-      `translate(0,${chartSize.height - chartSize.marginBottom})`
-    )
-    .call(d3.axisBottom(x).ticks(10).tickSizeOuter(0))
-    .call((g) =>
-      g
-        .append("text")
-        .attr("x", 30)
-        .attr("y", 35)
-        .attr("fill", "currentColor")
-        .attr("text-anchor", "start")
-        .attr("font-size", "12px")
-        .text(`${xLabel} ${unitsLabel(units, xType)}`)
-    );
+    mount.append(CM.svg.node());
+    DiagnosticsPanel.recordTimestamp('ChartScaffold.init', this._loadedAt);
+  },
 
-  // Add the vertical axis.
-  svg
-    .append("g")
-    .attr("transform", `translate(${chartSize.marginLeft},0)`)
-    .call(d3.axisLeft(y))
-    .call((g) => g.select("text").attr("font-size", "12px"))
-    .call((g) =>
-      g
-        .append("text")
-        .attr("x", -chartSize.marginLeft)
-        .attr("y", 0)
-        .attr("fill", "currentColor")
-        .attr("text-anchor", "start")
-        .attr("font-size", "12px")
-        .text(`${yLabel} ${unitsLabel(units, yType)}`)
-    );
+  render(data) {
+    if (!this._isInitialized) { console.error('[ChartScaffold] render() before init()'); return; }
+    this._data = data || this._data;
+    this._loadedAt = new Date().toISOString();
 
-  // Compute the points in pixel space as [x, y, z], where z is the name of the series.
-  const points = dataValues.map((d) => [x(d.x), y(d.y), d.z]);
+    const points = (DataPointLayer._data || []);
+    const dates = points.map(d => cmParseDate(d.date_obj)).filter(Boolean);
+    const weights = points.map(d => +d.value_lbs);
+    const baseline = BaselineLayer._data ? +BaselineLayer._data.value_lbs : null;
+    if (baseline != null) weights.push(baseline);
 
-  const layerPoints = layerValues.map((d) => [
-    x(d.x),
-    y(d.y),
-    `${parseFloat(d.y).toFixed(1)} ${unitsLabel(units, yType)}`,
-  ]);
+    if (dates.length) {
+      CM.x.domain(d3.extent(dates));
+    } else {
+      const now = new Date();
+      CM.x.domain([d3.timeMonth.offset(now, -1), now]);
+    }
+    if (weights.length) {
+      const lo = d3.min(weights), hi = d3.max(weights);
+      const pad = Math.max((hi - lo) * 0.1, 2);
+      CM.y.domain([lo - pad, hi + pad]).nice();
+    } else {
+      CM.y.domain([0, 1]);
+    }
 
-  // Group the points by series.
-  const groups = d3.rollup(
-    points,
-    (v) => Object.assign(v, { z: v[0][2] }),
-    (d) => d[2]
-  );
+    CM.svg.select('.cm-x-axis').call(d3.axisBottom(CM.x).ticks(6).tickSizeOuter(0));
+    CM.svg.select('.cm-y-axis').call(d3.axisLeft(CM.y).ticks(6))
+      .call(g => {
+        g.selectAll('.cm-y-label').remove();
+        g.append('text').attr('class', 'cm-y-label')
+          .attr('x', -CM_SIZE.marginLeft).attr('y', 12)
+          .attr('fill', 'currentColor').attr('text-anchor', 'start')
+          .text('Weight (lbs)');
+      });
 
-  // Draw the lines.
-  const line = d3.line();
-  const path = svg
-    .append("g")
-    .attr("fill", "none")
-    .attr("stroke", "#9bd1fa")
-    .attr("stroke-width", 2)
-    .attr("stroke-linejoin", "round")
-    .attr("stroke-linecap", "round")
-    .selectAll("path")
-    .data(groups.values())
-    .join("path")
-    .style("mix-blend-mode", "multiply")
-    .attr("d", line) 
-    .each(function (d) {
-      const lastPoint = d[d.length - 1];
-      svg
-      .append("text")
-      .attr("x", lastPoint[0] + 8)
-      .attr("y", lastPoint[1])
-      .attr("dy", "0.35em")
-      .attr("font-size", "10px")
-      .attr("fill", "#000")
-      .text(d.z);
-    });
+    DiagnosticsPanel.recordTimestamp('ChartScaffold.render', this._loadedAt);
+  },
 
-    // Add a new layer with a line for layer x and y.
-  const layerLine = d3
-    .line()
-    .x((d) => x(d.x))
-    .y((d) => y(d.y));
-  
-  svg
-    .append("path")
-    .attr("fill", "none")
-    .attr("stroke", "#f797b9")
-    .attr("stroke-width", 3)
-    .attr("d", layerLine(layerValues));
+  refresh() {
+    if (!this._data) { console.warn('[ChartScaffold] refresh() with no data'); return; }
+    console.log('[ChartScaffold] refresh()');
+    this.render(this._data);
+  },
 
-  svg
-    .append("g")
-    .selectAll("circle")
-    .data(layerPoints)
-    .join("circle")
-    .attr("cx", (d) => d[0])
-    .attr("cy", (d) => d[1])
-    .attr("r", 3)
-    .attr("fill", "#f797b9");
+  destroy() {
+    if (CM.svg) CM.svg.remove();
+    CM.svg = null; this._data = null; this._isInitialized = false;
+  },
+};
 
-  const layerDot = svg.append("g").attr("display", "none");
-  layerDot.append("circle").attr("r", 3.5);
-  layerDot.append("text").attr("text-anchor", "middle").attr("y", -20);
+// ───────────────────────────────────────────────────────────────
+// 2. BaselineLayer — horizontal dashed line at baseline weight.
+// ───────────────────────────────────────────────────────────────
+const BaselineLayer = {
+  _data: null,
+  _loadedAt: null,
+  _isInitialized: false,
 
-  svg
-    .on("pointerenter", pointerEntered)
-    .on("pointermove", pointerMoved)
-    .on("pointerleave", pointerLeft)
-    .on("touchstart", (event) => event.preventDefault());
+  init() {
+    this._isInitialized = true;
+    this._loadedAt = new Date().toISOString();
+    DiagnosticsPanel.recordTimestamp('BaselineLayer.init', this._loadedAt);
+  },
 
-  return svg.node();
+  render(data) {
+    if (!this._isInitialized) this.init();
+    this._data = data;
+    this._loadedAt = new Date().toISOString();
+    console.log(`[BaselineLayer] render() at ${this._loadedAt}`);
 
-  function pointerMoved(event) {
-    const [xm, ym] = d3.pointer(event);
-    const i = d3.leastIndex(points, ([x, y]) => Math.hypot(x - xm, y - ym));
-    const vi = d3.leastIndex(layerPoints, ([x, y]) =>
-      Math.hypot(x - xm, y - ym)
-    );
+    // Ensure scaffold scales reflect the baseline value.
+    ChartScaffold.render(ChartScaffold._data);
 
-    const [x, y, k] = points[i];
-    const [vx, vy, vk] = layerPoints[vi];
+    const value = data ? +(data.value_lbs != null ? data.value_lbs : data.value) : null;
+    CM.svg.selectAll('.cm-baseline').remove();
+    if (value != null && CM.y) {
+      const yPos = CM.y(value);
+      const g = CM.svg.append('g').attr('class', 'cm-baseline');
+      g.append('line')
+        .attr('x1', CM_SIZE.marginLeft).attr('x2', CM_SIZE.width - CM_SIZE.marginRight)
+        .attr('y1', yPos).attr('y2', yPos)
+        .attr('stroke', '#f797b9').attr('stroke-width', 2).attr('stroke-dasharray', '6 4');
+      g.append('text')
+        .attr('x', CM_SIZE.width - CM_SIZE.marginRight + 4).attr('y', yPos)
+        .attr('dy', '0.35em').attr('font-size', '11px').attr('fill', '#c44d76')
+        .text(`Baseline ${value.toFixed(1)} lb`);
+    }
+    DiagnosticsPanel.recordTimestamp('BaselineLayer.render', this._loadedAt);
+  },
 
-    path
-      .style("stroke", ({ z }) => (z === k ? null : "#ddd"))
-      .filter(({ z }) => z === k)
-      .raise();
-    
-    layerDot.attr("transform", `translate(${vx}, ${vy})`);
-    layerDot.select("text").text(`${vk}`).attr("background-color", "white");
-    layerDot.select("circle").attr("fill", "red");
+  refresh() {
+    if (!this._data) { console.warn('[BaselineLayer] refresh() with no data'); return; }
+    console.log('[BaselineLayer] refresh()');
+    this.render(this._data);
+  },
 
-    svg.property("value", dataValues[i]).dispatch("input", { bubbles: true });
-  }
+  destroy() {
+    if (CM.svg) CM.svg.selectAll('.cm-baseline').remove();
+    this._data = null; this._isInitialized = false;
+  },
+};
 
-  function pointerEntered() {
-    path.style("mix-blend-mode", null).style("stroke", "#ddd");
-    
-    layerDot.attr("display", null);
-  }
+// ───────────────────────────────────────────────────────────────
+// 3. DataPointLayer — patient weight line + dots over calendar dates.
+// ───────────────────────────────────────────────────────────────
+const DataPointLayer = {
+  _data: null,
+  _loadedAt: null,
+  _isInitialized: false,
 
-  function pointerLeft() {
-    path.style("mix-blend-mode", "multiply").style("stroke", null);
+  init() {
+    this._isInitialized = true;
+    this._loadedAt = new Date().toISOString();
+    DiagnosticsPanel.recordTimestamp('DataPointLayer.init', this._loadedAt);
+  },
 
-    layerDot.attr("display", "none");
+  render(data) {
+    if (!this._isInitialized) this.init();
+    this._data = Array.isArray(data) ? data : [];
+    this._loadedAt = new Date().toISOString();
+    console.log(`[DataPointLayer] render() at ${this._loadedAt} (${this._data.length} points)`);
 
-    svg.node().value = null;
-    svg.dispatch("input", { bubbles: true });
-  }
-}
+    // Recompute scales now that data is known.
+    ChartScaffold.render(ChartScaffold._data);
 
-function generateGraphs(graphs, units) {
-  return graphs.map((g, index) => {
-    const c = createChart(g, units);
+    const pts = this._data
+      .map(d => ({ ...d, _date: cmParseDate(d.date_obj), _w: +d.value_lbs }))
+      .filter(d => d._date)
+      .sort((a, b) => a._date - b._date);
 
-    const graphContainer = document.createElement('div');
-    graphContainer.className = 'graphContainer pageBreak';
+    CM.svg.selectAll('.cm-series').remove();
+    const g = CM.svg.append('g').attr('class', 'cm-series');
 
-    const titleWrapper = document.createElement('div');
-    titleWrapper.className = 'titleWrapper';
+    const line = d3.line().x(d => CM.x(d._date)).y(d => CM.y(d._w));
+    g.append('path')
+      .attr('fill', 'none').attr('stroke', '#3b8fcf').attr('stroke-width', 2.5)
+      .attr('stroke-linejoin', 'round').attr('stroke-linecap', 'round')
+      .attr('d', line(pts));
 
-    const titleDiv = document.createElement('div');
-    titleDiv.className = 'title';
-    titleDiv.textContent = g.title;
+    g.selectAll('circle').data(pts).join('circle')
+      .attr('cx', d => CM.x(d._date)).attr('cy', d => CM.y(d._w))
+      .attr('r', 4).attr('fill', '#3b8fcf');
 
-    titleWrapper.appendChild(titleDiv);
-    graphContainer.appendChild(titleWrapper);
+    DiagnosticsPanel.recordTimestamp('DataPointLayer.render', this._loadedAt);
+  },
 
-    const graphDiv = document.createElement('div');
-    graphDiv.id = `graph${index + 1}`;
-    graphDiv.append(c);
-    graphContainer.appendChild(graphDiv);
+  refresh() {
+    if (!this._data) { console.warn('[DataPointLayer] refresh() with no data'); return; }
+    console.log('[DataPointLayer] refresh()');
+    this.render(this._data);
+  },
 
-    const whoContainer = document.getElementById(g.tab);
-    whoContainer.appendChild(graphContainer);
+  destroy() {
+    if (CM.svg) CM.svg.selectAll('.cm-series').remove();
+    this._data = null; this._isInitialized = false;
+  },
+};
+
+// ───────────────────────────────────────────────────────────────
+// 4. AnnotationLayer — % TBWL label at the latest data point.
+// ───────────────────────────────────────────────────────────────
+const AnnotationLayer = {
+  _data: null,
+  _loadedAt: null,
+  _isInitialized: false,
+
+  init() {
+    this._isInitialized = true;
+    this._loadedAt = new Date().toISOString();
+    DiagnosticsPanel.recordTimestamp('AnnotationLayer.init', this._loadedAt);
+  },
+
+  render(data) {
+    if (!this._isInitialized) this.init();
+    this._data = data;
+    this._loadedAt = new Date().toISOString();
+    console.log(`[AnnotationLayer] render() at ${this._loadedAt}`);
+
+    CM.svg.selectAll('.cm-annotation').remove();
+    const points = DataPointLayer._data || [];
+    if (data && points.length) {
+      const last = points
+        .map(d => ({ ...d, _date: cmParseDate(d.date_obj), _w: +d.value_lbs }))
+        .filter(d => d._date)
+        .sort((a, b) => a._date - b._date)
+        .slice(-1)[0];
+      if (last) {
+        const pct = +data.tbwl_pct;
+        const sign = pct >= 0 ? '−' : '+'; // positive TBWL = weight lost
+        const g = CM.svg.append('g').attr('class', 'cm-annotation');
+        g.append('text')
+          .attr('x', CM.x(last._date)).attr('y', CM.y(last._w) - 14)
+          .attr('text-anchor', 'middle').attr('font-size', '13px').attr('font-weight', 'bold')
+          .attr('fill', pct >= 0 ? '#1f8a4c' : '#c0392b')
+          .text(`${sign}${Math.abs(pct).toFixed(1)}% TBWL`);
+      }
+    }
+    DiagnosticsPanel.recordTimestamp('AnnotationLayer.render', this._loadedAt);
+  },
+
+  refresh() {
+    if (!this._data) { console.warn('[AnnotationLayer] refresh() with no data'); return; }
+    console.log('[AnnotationLayer] refresh()');
+    this.render(this._data);
+  },
+
+  destroy() {
+    if (CM.svg) CM.svg.selectAll('.cm-annotation').remove();
+    this._data = null; this._isInitialized = false;
+  },
+};
+
+// ───────────────────────────────────────────────────────────────
+// 5. TooltipManager — hover tooltip. Event-driven, no render().
+// ───────────────────────────────────────────────────────────────
+const TooltipManager = {
+  _data: null,
+  _loadedAt: null,
+  _isInitialized: false,
+  _tip: null,
+
+  init(data) {
+    this._data = Array.isArray(data) ? data : [];
+    this._isInitialized = true;
+    this._loadedAt = new Date().toISOString();
+    console.log(`[TooltipManager] init() at ${this._loadedAt}`);
+
+    this._tip = CM.svg.append('g').attr('class', 'cm-tooltip').attr('display', 'none');
+    this._tip.append('circle').attr('r', 5).attr('fill', '#0f619f');
+    this._tip.append('text').attr('text-anchor', 'middle').attr('y', -26)
+      .attr('font-size', '11px').attr('fill', '#1f2933');
+
+    CM.svg
+      .on('pointermove', (e) => this._onMove(e))
+      .on('pointerleave', () => this._tip.attr('display', 'none'))
+      .on('touchstart', (e) => e.preventDefault());
+
+    DiagnosticsPanel.recordTimestamp('TooltipManager.init', this._loadedAt);
+  },
+
+  _onMove(event) {
+    const pts = (this._data || [])
+      .map(d => ({ ...d, _date: cmParseDate(d.date_obj), _w: +d.value_lbs }))
+      .filter(d => d._date);
+    if (!pts.length) return;
+    const [mx] = d3.pointer(event);
+    const i = d3.leastIndex(pts, d => Math.abs(CM.x(d._date) - mx));
+    const p = pts[i];
+    this._tip.attr('display', null)
+      .attr('transform', `translate(${CM.x(p._date)},${CM.y(p._w)})`);
+    this._tip.select('text')
+      .text(`${p.date_label}: ${(+p.value_lbs).toFixed(1)} lb (${(+p.tbwl_pct).toFixed(1)}%)`);
+  },
+
+  refresh() {
+    if (!this._isInitialized) { console.warn('[TooltipManager] refresh() before init()'); return; }
+    console.log('[TooltipManager] refresh()');
+    this.init(this._data);
+  },
+
+  destroy() {
+    if (CM.svg) CM.svg.on('pointermove', null).on('pointerleave', null).on('touchstart', null);
+    if (this._tip) this._tip.remove();
+    this._tip = null; this._data = null; this._isInitialized = false;
+  },
+};
+
+// ───────────────────────────────────────────────────────────────
+// Initialization — order matters.
+// ───────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  const chartData = JSON.parse('{{ chart_data_json|escapejs }}');
+
+  ChartScaffold.init(chartData.chart_config);
+  BaselineLayer.render(chartData.baseline_data);
+  DataPointLayer.render(chartData.datapoints);
+  AnnotationLayer.render(chartData.latest_annotation);
+  TooltipManager.init(chartData.datapoints);
+
+  // Re-render the visual layers now that all data is present so axes/baseline
+  // reflect the full dataset.
+  ChartScaffold.refresh();
+  BaselineLayer.refresh();
+  DataPointLayer.refresh();
+  AnnotationLayer.refresh();
+
+  // Record Python-side pipeline timestamps.
+  Object.entries(chartData._pipeline_timestamps || {}).forEach(([k, v]) => {
+    DiagnosticsPanel.recordTimestamp(`python.${k}`, v);
   });
-}
+  DiagnosticsPanel.recordTimestamp('js.domContentLoaded', new Date().toISOString());
 
-// print current tab
-function printGraphs() {
-  window.print();
-}
-
-// switch between graphs
-function onWHOClick() {
-  document.getElementById("WHO").classList.remove("hidden");
-  document.getElementById("CDC").classList.add("hidden");
-}
-
-function onCDCClick() {
-  document.getElementById("WHO").classList.add("hidden");
-  document.getElementById("CDC").classList.remove("hidden");
-}
-
-function onLbsClick() {
-  graphs.map((g, index) => {
-    const c = createChart(g, unitsTypes.LBS);
-    const graph = document.getElementById(`graph${index + 1}`);
-    graph.replaceChildren(c);
+  // Shift+D toggles diagnostics overlay.
+  document.addEventListener('keydown', (e) => {
+    if (e.shiftKey && (e.key === 'D' || e.key === 'd')) DiagnosticsPanel.toggle();
   });
-}
+});
 
-function onKgClick() {
-  graphs.map((g, index) => {
-    const c = createChart(g, unitsTypes.KG);
-    const graph = document.getElementById(`graph${index + 1}`);
-    graph.replaceChildren(c);
-  });
-}
+// ───────────────────────────────────────────────────────────────
+// Debug hooks exposed on window.
+// ───────────────────────────────────────────────────────────────
+window.refreshComponent = function (name) {
+  const components = { ChartScaffold, BaselineLayer, DataPointLayer, AnnotationLayer };
+  if (!components[name]) { console.error(`Unknown component: ${name}`); return; }
+  console.log(`[DEBUG] Refreshing ${name}`);
+  components[name].refresh();
+};
 
-// get graphs data from the context
-const graphs = {{ graphs|safe }};
-
-generateGraphs(graphs, unitsTypes.LBS);
-
+window.refreshAll = function () {
+  [ChartScaffold, BaselineLayer, DataPointLayer, AnnotationLayer].forEach(c => c.refresh());
+};
 </script>

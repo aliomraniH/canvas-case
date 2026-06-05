@@ -1,16 +1,16 @@
 {
-    "sdk_version": "0.1.4",
-    "plugin_version": "0.0.1",
-    "name": "growth_charts",
-    "description": "This protocol enables you to input observations into growth charts and generate graphs.",
+    "sdk_version": "0.163.1",
+    "plugin_version": "0.1.0",
+    "name": "cardiometabolic_tracker",
+    "description": "Adult GLP-1 weight-management tracker: plots each patient's weight against their own baseline with % total body weight loss (TBWL) over calendar time.",
     "components": {
         "protocols": [
             {
                 "class": "growth_charts.protocols.growth_charts:GenerateVitalsGraphs",
-                "description": "This protocol enables you to input observations into growth charts and generate graphs.",
+                "description": "Renders an adult cardiometabolic weight trajectory chart from the patient's weight observations.",
                 "data_access": {
                     "event": "",
-                    "read": [],
+                    "read": ["Patient", "Observation", "Note"],
                     "write": []
                 }
             }
