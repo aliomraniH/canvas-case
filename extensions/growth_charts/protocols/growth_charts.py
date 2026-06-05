@@ -22,7 +22,16 @@ from canvas_sdk.effects.launch_modal import LaunchModalEffect
 from canvas_sdk.handlers.action_button import ActionButton, SHOW_BUTTON_REGEX
 from canvas_sdk.templates import render_to_string
 from canvas_sdk.v1.data import Patient, Observation, Note
-from logger import log
+
+try:
+    # Canvas sandbox provides the runtime logger.
+    from logger import log
+except ImportError:  # running outside the sandbox (e.g. local pytest)
+    class _NoopLog:
+        def __getattr__(self, _name):
+            return lambda *args, **kwargs: None
+
+    log = _NoopLog()
 
 PROCESSING_VERSION = "1.0"
 
