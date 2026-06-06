@@ -14,6 +14,11 @@ Organized into five layers (see component_architecture.md):
   Section 5 — ActionButton Handler  (thin orchestration)
 """
 
+# Defer annotation evaluation (PEP 563): the Canvas RestrictedPython sandbox does
+# not expose every builtin (e.g. `object`), and without this, annotations like
+# `dict[str, object]` are evaluated at definition time and raise NameError.
+from __future__ import annotations
+
 import json
 from datetime import date, datetime
 
