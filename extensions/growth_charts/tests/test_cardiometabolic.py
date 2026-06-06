@@ -49,7 +49,7 @@ except ImportError:
 # If they don't exist yet, tests will show ImportError — that's intentional
 # ---------------------------------------------------------------------------
 try:
-    from cardiometabolic_tracker.protocols.growth_charts import (
+    from protocols.growth_charts import (
         calculate_tbwl,
         convert_weight_to_lbs,
         compute_baseline,
