@@ -174,3 +174,7 @@ cython_debug/
 # Claude Code local settings (may be created in any plugin subdirectory)
 .claude/settings.local.json
 **/.claude/settings.local.json
+
+# Debug-capture session state (local tooling artifacts)
+.workspace_state/
+**/.workspace_state/

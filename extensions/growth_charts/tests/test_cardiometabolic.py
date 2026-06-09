@@ -93,9 +93,12 @@ def make_observation(
     obs = Mock()
     obs.id = obs_id
     obs.value = value
-    obs.unit = unit
+    obs.unit = unit    # kept for backward compatibility with any old references
+    obs.units = unit   # Canvas SDK Observation field is 'units' (plural), not 'unit'
+    obs.note_id = abs(hash(obs_id)) % 9000 + 1000  # realistic int (BigIntegerField)
     obs.note = Mock()
     obs.note.id = f"note_{obs_id}"
+    obs.note.dbid = abs(hash(obs_id)) % 9000 + 1000
     obs.note.datetime_of_service = start_date + timedelta(days=days_from_start)
     return obs
 
@@ -391,7 +394,11 @@ class IntegrationTest_N1QueryFix(unittest.TestCase):
     """
     Verify the N+1 Note query bug is fixed.
     Original code: one Note.objects.get() call per observation (inside loop).
-    Fixed code: one Note.objects.filter(id__in=note_ids) call for all notes.
+    Fixed code: one Note.objects.filter(dbid__in=int_ids) call for all notes.
+
+    Root cause discovered during live testing: Canvas Observation.note_id is a
+    BigIntegerField (stores Note.dbid integer PK), not a UUIDField. The fix
+    uses Note.objects.filter(dbid__in=...) and keys the return dict by str(dbid).
     """
 
     def setUp(self):
@@ -401,38 +408,51 @@ class IntegrationTest_N1QueryFix(unittest.TestCase):
     @patch("protocols.growth_charts.Note")
     def test_batch_fetch_not_get_in_loop(self, MockNote):
         """
-        batch_load_notes() must call .filter() once, not .get() N times.
+        batch_load_notes() must call .filter(dbid__in=...) once, not .get() N times.
+        Note IDs are integer strings ("8", "36") matching Observation.note_id (BigIntegerField).
         """
-        mock_notes = {f"note_{i:03d}": Mock() for i in range(5)}
+        note_ids = [str(i) for i in range(8, 13)]   # ["8","9","10","11","12"]
+        mock_notes_list = []
+        for nid in note_ids:
+            n = Mock()
+            n.dbid = int(nid)
+            mock_notes_list.append(n)
+
         mock_qs = MagicMock()
-        mock_qs.__iter__ = Mock(return_value=iter(mock_notes.values()))
+        mock_qs.__iter__ = Mock(return_value=iter(mock_notes_list))
         MockNote.objects.filter.return_value = mock_qs
 
-        note_ids = list(mock_notes.keys())
         result = batch_load_notes(note_ids)
 
-        # filter() called exactly once
+        # filter() called exactly once with dbid__in (integer PK), not id__in (UUID)
         MockNote.objects.filter.assert_called_once()
+        call_kwargs = MockNote.objects.filter.call_args
+        self.assertIn("dbid__in", call_kwargs.kwargs,
+                      "Must filter on dbid__in (integer PK), not id__in (UUID field)")
 
         # get() was never called
         MockNote.objects.get.assert_not_called()
 
     @patch("protocols.growth_charts.Note")
     def test_batch_returns_dict_keyed_by_id(self, MockNote):
-        """Return value must be {note_id: note_object} for O(1) lookup."""
+        """Return value must be {str(note_dbid): note_object} for O(1) lookup.
+
+        Keys match what _note_id_of() returns: str(obs.note_id) — the integer PK.
+        """
         mock_note_a = Mock()
-        mock_note_a.id = "note_a"
+        mock_note_a.dbid = 8
         mock_note_b = Mock()
-        mock_note_b.id = "note_b"
+        mock_note_b.dbid = 36
 
         mock_qs = MagicMock()
         mock_qs.__iter__ = Mock(return_value=iter([mock_note_a, mock_note_b]))
         MockNote.objects.filter.return_value = mock_qs
 
-        result = batch_load_notes(["note_a", "note_b"])
-        self.assertIn("note_a", result)
-        self.assertIn("note_b", result)
-        self.assertEqual(result["note_a"], mock_note_a)
+        result = batch_load_notes(["8", "36"])
+        self.assertIn("8", result)
+        self.assertIn("36", result)
+        self.assertEqual(result["8"], mock_note_a)
+        self.assertEqual(result["36"], mock_note_b)
 
 
 class IntegrationTest_BuildChartData(unittest.TestCase):

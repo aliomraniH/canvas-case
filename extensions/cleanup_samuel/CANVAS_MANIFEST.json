@@ -1,0 +1,29 @@
+{
+    "sdk_version": "0.163.1",
+    "plugin_version": "0.0.1",
+    "name": "cleanup_samuel",
+    "description": "One-shot cleanup: enters 5 bad weight observations for Samuel Alta in error.",
+    "components": {
+        "protocols": [
+            {
+                "class": "cleanup_samuel.protocols.cleanup:CleanupSamuelAlta",
+                "description": "Enters 5 accidentally-created observations in error for Samuel Alta.",
+                "data_access": {
+                    "event": "",
+                    "read": ["Observation"],
+                    "write": ["Observation"]
+                }
+            }
+        ],
+        "commands": [],
+        "content": [],
+        "effects": [],
+        "views": []
+    },
+    "secrets": [],
+    "tags": {},
+    "references": [],
+    "license": "",
+    "diagram": false,
+    "readme": "./README.md"
+}

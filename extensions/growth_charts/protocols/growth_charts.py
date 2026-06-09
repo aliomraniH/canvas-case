@@ -116,7 +116,7 @@ def load_weight_observations_raw(patient_id: str) -> list[dict]:
             {
                 "id": getattr(obs, "id", None),
                 "value_original": obs.value,
-                "unit_original": getattr(obs, "unit", None),
+                "unit_original": getattr(obs, "units", None),  # SDK field is 'units' (plural)
                 "canvas_note_id": _note_id_of(obs),
                 "_loaded_at": _now_iso(),
             }
@@ -127,12 +127,25 @@ def load_weight_observations_raw(patient_id: str) -> list[dict]:
 def batch_load_notes(note_ids: list[str]) -> dict[str, object]:
     """SINGLE query for all notes — the N+1 fix.
 
-    Returns {note_id: Note} for O(1) lookup during processing.
+    Observation.note_id is a BigIntegerField storing Note.dbid (the integer PK),
+    NOT the Note.id UUID field. Filter on dbid, key the result by str(dbid) so
+    that attach_dates_to_observations can do O(1) lookups by the same value.
+
+    Returns {str(note_dbid): Note} for O(1) lookup during processing.
     """
     if not note_ids:
         return {}
-    notes = Note.objects.filter(id__in=note_ids)
-    return {str(getattr(note, "id", "")): note for note in notes}
+    # Convert to integers (Observation.note_id is BigIntegerField)
+    int_ids: list[int] = []
+    for nid in note_ids:
+        try:
+            int_ids.append(int(nid))
+        except (ValueError, TypeError):
+            log.warning("Skipping non-integer note_id: %r", nid)
+    if not int_ids:
+        return {}
+    notes = Note.objects.filter(dbid__in=int_ids)
+    return {str(getattr(note, "dbid", "")): note for note in notes}
 
 
 def attach_dates_to_observations(
@@ -192,10 +205,13 @@ def _obs_value(obs) -> float:
 
 
 def _obs_unit(obs) -> str:
-    """Read a weight unit from a raw dict or an SDK-like object."""
+    """Read a weight unit from a raw dict or an SDK-like object.
+
+    The Canvas SDK Observation model uses 'units' (plural), not 'unit'.
+    """
     if isinstance(obs, dict):
         return obs.get("unit_original")
-    return getattr(obs, "unit", None)
+    return getattr(obs, "units", None)  # SDK field is 'units' (plural)
 
 
 def _obs_date(obs):
@@ -214,10 +230,12 @@ def _obs_id(obs):
 
 
 def _note_id_of(obs) -> str:
-    """Read the note id from an SDK-like observation object."""
-    note = getattr(obs, "note", None)
-    if note is not None and getattr(note, "id", None) is not None:
-        return str(note.id)
+    """Read the note dbid from an SDK-like observation object.
+
+    Observation.note_id is a BigIntegerField that stores Note.dbid (the integer
+    primary key). We never use Note.id (the UUIDField) here because
+    Note.objects.filter(dbid__in=...) is the correct lookup path.
+    """
     note_id = getattr(obs, "note_id", None)
     return str(note_id) if note_id is not None else None
 
@@ -233,8 +251,14 @@ def _baseline_record(observations: list) -> dict:
     if not observations:
         raise ValueError("Cannot compute baseline from zero observations")
 
+    def _strip_tz(dt):
+        """Strip timezone info for consistent sorting (mix of FHIR-aware and naive dates)."""
+        if dt is not None and hasattr(dt, "tzinfo") and dt.tzinfo is not None:
+            return dt.replace(tzinfo=None)
+        return dt
+
     def sort_key(obs):
-        date = _obs_date(obs)
+        date = _strip_tz(_obs_date(obs))
         # Earliest date first; within a date, higher weight (in lbs) first.
         return (date, -convert_weight_to_lbs(_obs_value(obs), _obs_unit(obs)))
 
@@ -341,7 +365,12 @@ def build_chart_data(observations_raw: list, notes_or_baseline=None) -> dict:
     datapoints = [
         build_observation_processed(obs, baseline) for obs in observations_with_dates
     ]
-    datapoints.sort(key=lambda dp: dp["date_obj"])
+    # Strip timezone for sorting — FHIR dates are tz-aware, UI dates may be naive.
+    datapoints.sort(key=lambda dp: (
+        dp["date_obj"].replace(tzinfo=None)
+        if dp["date_obj"] is not None and getattr(dp["date_obj"], "tzinfo", None) is not None
+        else dp["date_obj"]
+    ))
 
     latest_tbwl_pct = datapoints[-1]["tbwl_pct"] if datapoints else 0.0
 
@@ -388,8 +417,19 @@ def validate_chart_payload(payload: dict) -> tuple[bool, list[str]]:
         datapoints = []
 
     # 3. no future observation dates
-    now = datetime.now()
-    if any(dp.get("date_obj") and dp["date_obj"] > now for dp in datapoints):
+    # Use timezone-aware now so we can compare with both aware and naive date_obj values.
+    # FHIR-created observations carry tzinfo (+00:00); UI-created ones may be naive.
+    now_naive = datetime.now()
+
+    def _is_future(dt) -> bool:
+        """Return True if dt is in the future, handling tz-aware and naive datetimes."""
+        if dt is None:
+            return False
+        if hasattr(dt, "tzinfo") and dt.tzinfo is not None:
+            return dt.replace(tzinfo=None) > now_naive   # strip tz, compare in local time
+        return dt > now_naive
+
+    if any(_is_future(dp.get("date_obj")) for dp in datapoints):
         errors.append("Observation date is in the future")
 
     # 4. latest TBWL in plausible [-20, 50] range
@@ -542,7 +582,7 @@ class GenerateVitalsGraphs(ActionButton):
             patient=patient,
             baseline=payload["baseline_data"],
             datapoints=payload["datapoints"],
-            pipeline_timestamps=payload["_pipeline_timestamps"],
+            pipeline_timestamps=payload.get("_pipeline_timestamps", {}),
         )
 
         # 5. Render — serialize the whole context for the template's JSON.parse()

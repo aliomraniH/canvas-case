@@ -341,13 +341,15 @@ const AnnotationLayer = {
         .slice(-1)[0];
       if (last) {
         const pct = +data.tbwl_pct;
-        const sign = pct >= 0 ? '−' : '+'; // positive TBWL = weight lost
+        // Clinical convention: positive TBWL = weight lost → show ↓ (good, green)
+        //                      negative TBWL = weight gained → show ↑ (concern, red)
+        const arrow = pct >= 0 ? '↓' : '↑';
         const g = CM.svg.append('g').attr('class', 'cm-annotation');
         g.append('text')
           .attr('x', CM.x(last._date)).attr('y', CM.y(last._w) - 14)
           .attr('text-anchor', 'middle').attr('font-size', '13px').attr('font-weight', 'bold')
           .attr('fill', pct >= 0 ? '#1f8a4c' : '#c0392b')
-          .text(`${sign}${Math.abs(pct).toFixed(1)}% TBWL`);
+          .text(`${arrow}${Math.abs(pct).toFixed(1)}% TBWL`);
       }
     }
     DiagnosticsPanel.recordTimestamp('AnnotationLayer.render', this._loadedAt);
