@@ -85,9 +85,28 @@ GLP1_AGENT_KEYWORDS = {
 #   SCALE      Pi-Sunyer et al., NEJM 2015;373:11-22 — means only published;
 #              bounds synthesized at mean x0.5 / x1.5 (the relative spread the
 #              STEP-1 and SURMOUNT-1 percentile columns show). Approximation.
+# SCALE published means only — its band bounds are synthesized, and the UI
+# must disclose that (v0.2.3). Shown only when estimated_bounds is True.
+SCALE_BOUNDS_DISCLOSURE = (
+    "Band bounds are estimated as 0.5×–1.5× of the published trial mean; "
+    "SCALE did not report percentile distributions. Interpret the band width "
+    "as illustrative, not statistical."
+)
+
+# Citation volume/page strings verified against glp1_science_reference.md
+# (Gate 1, 2026-06-10): 2021;384:989-1002 / 2022;387:205-216 / 2015;373:11-22.
 EXPECTED_RESPONSE_BANDS = {
     "semaglutide_step1": {
         "label": "STEP-1",
+        "metadata": {
+            "trial": "STEP 1",
+            "citation": (
+                "Wilding JPH, et al. Once-Weekly Semaglutide in Adults with "
+                "Overweight or Obesity. N Engl J Med 2021;384:989-1002."
+            ),
+            "summary": "Mean −14.9% body weight at 68 weeks vs −2.4% placebo (n=1,961).",
+            "estimated_bounds": False,
+        },
         "points": (
             (0, 0.0, 0.0), (4, 0.5, 4.5), (8, 1.0, 7.0), (12, 2.0, 11.0),
             (16, 3.0, 13.5), (20, 4.0, 15.0), (24, 5.0, 16.5), (36, 6.0, 19.0),
@@ -96,6 +115,15 @@ EXPECTED_RESPONSE_BANDS = {
     },
     "tirzepatide_surmount1": {
         "label": "SURMOUNT-1",
+        "metadata": {
+            "trial": "SURMOUNT-1",
+            "citation": (
+                "Jastreboff AM, et al. Tirzepatide Once Weekly for the "
+                "Treatment of Obesity. N Engl J Med 2022;387:205-216."
+            ),
+            "summary": "Mean −15.0% to −20.9% at 72 weeks by dose vs −3.1% placebo (n=2,539).",
+            "estimated_bounds": False,
+        },
         "points": (
             (0, 0.0, 0.0), (4, 0.8, 5.5), (8, 2.0, 10.0), (12, 3.5, 14.5),
             (16, 5.0, 18.0), (24, 8.0, 22.0), (36, 10.0, 26.0),
@@ -104,6 +132,16 @@ EXPECTED_RESPONSE_BANDS = {
     },
     "liraglutide_scale": {
         "label": "SCALE",
+        "metadata": {
+            "trial": "SCALE",
+            "citation": (
+                "Pi-Sunyer X, et al. A Randomized, Controlled Trial of 3.0 mg "
+                "of Liraglutide in Weight Management. N Engl J Med 2015;373:11-22."
+            ),
+            "summary": "Mean −8.0% (8.4 kg) at 56 weeks vs −2.6% placebo (n=3,731).",
+            "estimated_bounds": True,
+            "disclosure": SCALE_BOUNDS_DISCLOSURE,
+        },
         "points": (
             (0, 0.0, 0.0), (12, 2.1, 6.3), (24, 3.2, 9.6),
             (40, 3.9, 11.7), (56, 4.2, 12.6),
@@ -625,7 +663,12 @@ def build_expected_band(
     if agent not in EXPECTED_RESPONSE_BANDS:
         agent = DEFAULT_AGENT
     band_def = EXPECTED_RESPONSE_BANDS[agent]
-    result = {"agent": agent, "label": band_def["label"], "points": []}
+    result = {
+        "agent": agent,
+        "label": band_def["label"],
+        "band_metadata": dict(band_def["metadata"]),
+        "points": [],
+    }
     if baseline_lbs is None or float(baseline_lbs) <= 0:
         return result
     if max_weeks is None or float(max_weeks) <= 0:
@@ -933,6 +976,7 @@ def assemble_template_context(
         expected_band = {
             "agent": DEFAULT_AGENT,
             "label": EXPECTED_RESPONSE_BANDS[DEFAULT_AGENT]["label"],
+            "band_metadata": dict(EXPECTED_RESPONSE_BANDS[DEFAULT_AGENT]["metadata"]),
             "points": [],
         }
     if velocity_stats is None:
@@ -969,6 +1013,9 @@ def assemble_template_context(
     timestamps["template_context_assembled"] = now
 
     band_label = expected_band.get("label") or EXPECTED_RESPONSE_BANDS[DEFAULT_AGENT]["label"]
+    band_metadata = expected_band.get("band_metadata") or {}
+    # Estimated (synthesized) bounds are disclosed in the legend itself (v0.2.3).
+    legend_label = f"{band_label}, estimated" if band_metadata.get("estimated_bounds") else band_label
     return {
         "patient": {**patient, "_component": "patient_info", "_loaded_at": now},
         "baseline_data": {**baseline, "_component": "baseline_layer", "_loaded_at": now},
@@ -984,7 +1031,7 @@ def assemble_template_context(
             "y_axis_unit": "lbs",
             "show_benchmark_overlay": bool(expected_band.get("points")),
             "benchmark_source": band_label,
-            "legend_text": f"Expected response ({band_label})",
+            "legend_text": f"Expected response ({legend_label})",
             # Axis padding rule — JS must use these, not hardcoded values, so
             # the rendered domain can't drift from _axis_domain's suppression.
             "axis_pad_fraction": AXIS_PAD_FRACTION,

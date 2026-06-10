@@ -23,6 +23,7 @@ try:
         EXPECTED_RESPONSE_BANDS,
         FLAG_DEFINITIONS,
         GLP1_AGENT_KEYWORDS,
+        SCALE_BOUNDS_DISCLOSURE,
         _collect_axis_weights,
         assemble_template_context,
         build_chart_data,
@@ -613,6 +614,65 @@ class TestV022Hygiene(V02TestCase):
     def test_collect_axis_weights_handles_empty_band(self):
         weights = _collect_axis_weights([dp(0, 0.0, 198.0)], 198.0, {"points": []})
         self.assertEqual(weights, [198.0, 198.0])
+
+
+# ---------------------------------------------------------------------------
+# Verifies: v0.2.3 @ 83f4004 (SCALE disclosure + trial citations patch;
+# planned as "v0.2.1" in the revised prompt — that number was already taken
+# by the tz/statsbar fix, deviation reported per build-discipline Gate 3)
+# ---------------------------------------------------------------------------
+
+class TestBandMetadata(V02TestCase):
+    def test_citation_per_agent(self):
+        # Volume/page strings verified against glp1_science_reference.md
+        # (Gate 1): the file's hyphenated forms win over the prompt's en dashes.
+        expected = {
+            "semaglutide_step1": ("STEP 1", "2021;384:989-1002"),
+            "tirzepatide_surmount1": ("SURMOUNT-1", "2022;387:205-216"),
+            "liraglutide_scale": ("SCALE", "2015;373:11-22"),
+        }
+        for agent, (trial, volpage) in expected.items():
+            band = build_expected_band(200.0, START, 24.0, agent)
+            meta = band["band_metadata"]
+            self.assertEqual(meta["trial"], trial)
+            self.assertIn(volpage, meta["citation"])
+            self.assertIn("N Engl J Med", meta["citation"])
+            self.assertTrue(meta["summary"])
+
+    def test_estimated_bounds_true_only_for_scale(self):
+        flags = {
+            agent: build_expected_band(200.0, START, 24.0, agent)["band_metadata"]["estimated_bounds"]
+            for agent in EXPECTED_RESPONSE_BANDS
+        }
+        self.assertEqual(flags, {
+            "semaglutide_step1": False,
+            "tirzepatide_surmount1": False,
+            "liraglutide_scale": True,
+        })
+
+    def test_disclosure_present_only_when_estimated(self):
+        scale = build_expected_band(200.0, START, 24.0, "liraglutide_scale")
+        self.assertEqual(scale["band_metadata"]["disclosure"], SCALE_BOUNDS_DISCLOSURE)
+        self.assertIn("illustrative, not statistical", SCALE_BOUNDS_DISCLOSURE)
+        for agent in ("semaglutide_step1", "tirzepatide_surmount1"):
+            meta = build_expected_band(200.0, START, 24.0, agent)["band_metadata"]
+            self.assertNotIn("disclosure", meta)
+
+    def test_legend_marks_estimated_bounds(self):
+        def legend_for(agent):
+            band = build_expected_band(215.0, START, 24.0, agent)
+            context = assemble_template_context(
+                patient={"patient_id": "x"},
+                baseline={"value": 215.0, "value_lbs": 215.0},
+                datapoints=[],
+                pipeline_timestamps={},
+                expected_band=band,
+            )
+            return context["chart_config"]["legend_text"]
+
+        self.assertEqual(legend_for("liraglutide_scale"), "Expected response (SCALE, estimated)")
+        self.assertEqual(legend_for("semaglutide_step1"), "Expected response (STEP-1)")
+        self.assertEqual(legend_for("tirzepatide_surmount1"), "Expected response (SURMOUNT-1)")
 
 
 if __name__ == "__main__":
