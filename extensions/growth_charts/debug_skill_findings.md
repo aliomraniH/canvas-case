@@ -106,3 +106,15 @@ entry by origin frame (`plugin` | `host` | `unknown`, recorded per entry in
 `console_log.json`), assert only on plugin-attributable errors, route
 ambiguous entries to the brief for human judgment. This is maintenance of an
 existing mode (in-scope for the playbook file), not a new capability.
+
+## v0.2.3 disclosure patch (2026-06-10) — tier usage
+
+- **Tier 0:** `@0.2.3 enabled`.
+- **Tier 2 (Gate 4 live smoke):** 32/32 via the extended
+  `tier2_v02_assertions.js` on P1/P2/P4 — citation panel assertions added to
+  the existing script per Gate 5 (extend, don't duplicate). Proven: SCALE
+  legend carries "estimated" + amber disclosure + 2015;373 citation (P4);
+  trial-derived bands unmarked with 2021;384 (P1); no-med fallback panel
+  cites STEP 1 (P2). All previously pinned values unchanged.
+- **Tiers 1/3–5:** Tier 1 folded into the Tier-2 run as before; no failures,
+  no new tooling.

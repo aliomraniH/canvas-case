@@ -59,6 +59,22 @@ fewer than 2 observations (zero observed span).
 spread the STEP-1 and SURMOUNT-1 percentile columns exhibit. Replace with
 published percentiles if sourced in v0.3.
 
+**Band provenance disclosure (v0.2.3):** STEP-1 and SURMOUNT-1 bounds are
+trial-derived; SCALE's are synthesized (mean ×0.5/×1.5). A clinician
+previously could not tell the difference, so the disclosure now lives where
+their eyes are: the SCALE legend reads "Expected response (SCALE, estimated)"
+and every band carries an ⓘ panel ("About this reference band") with trial
+name, one-line outcome summary, and the NEJM citation — SCALE's panel adds an
+amber note that its band width is illustrative, not statistical. Citation
+volume/page strings were verified against `glp1_science_reference.md` before
+hardcoding (Gate 1; the file's hyphenated page ranges win over the prompt's
+en dashes). Data-quality flag for v0.3: the reference file's SURMOUNT-1 table
+(15 mg, 22.5% at wk 72) and SCALE table (8.4% at wk 56) differ from the
+published primary-endpoint means quoted in the panel summaries (−20.9% by
+dose at 72 wk; −8.0%/8.4 kg at 56 wk) — likely estimand and kg-vs-% mixups in
+the reference tables. Band geometry was NOT changed in v0.2.3 (no-behavior-
+change constraint); reconciling the tables is a v0.3 item.
+
 **Weight-space inversion:** `upper_pct` (more loss) maps to the LOWER weight
 on screen. The band's visual top edge is `lower_pct`'s weight. The P2
 "patient above band" assertion is therefore `last_weight > lower_lbs(last)`.
