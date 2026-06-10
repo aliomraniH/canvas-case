@@ -270,6 +270,40 @@ Lori Collins' chart is at a stable URL (confirmed from DOM extraction):
 ```
 Weight Trajectory button is in the Vital Signs section. Button text: `Weight Trajectory`.
 
+### FHIR-created MedicationStatements surface in the SDK Medication model
+
+Records created via `POST /MedicationStatement` (fumage) are queryable
+server-side with `Medication.objects.for_patient(id).active()`. Proven live in
+the v0.2 agent-detection feature (Wegovy → STEP-1 legend on the seeded
+responder patient).
+
+### LaunchModalEffect target does not change the iframe context
+
+Switching `DEFAULT_MODAL` → `RIGHT_CHART_PANE_LARGE` still renders plugin
+content in an `about:srcdoc` iframe. All existing Tier 1/2 selectors remain
+valid across target switches.
+
+### Patient create requires the us-core-birthsex extension
+
+`POST /Patient` without the
+`http://hl7.org/fhir/us/core/StructureDefinition/us-core-birthsex` extension
+is rejected with "did not adhere to the Patient schema" (HTTP 500).
+
+### Weight Observations must use unit string `lb`, not `lbs`
+
+`POST /Observation` with `valueQuantity.unit = "lbs"` is rejected with
+"Invalid sign unit detected for weight" (HTTP 422). `kg` is also accepted.
+
+### One empty ZZTEST-GLP1 patient exists from an aborted seeding run
+
+A guard-protected abort left one patient with zero observations on the
+sandbox. Harmless and intentionally left in place — deletion is blocked in
+this sandbox (FHIR writes are permanent).
+
+> These findings are also encoded in the `build-discipline` skill's Gate 1
+> known-facts list (fast path). This section remains the canonical in-repo
+> record; new facts get appended to BOTH.
+
 ---
 
 ## Credential management

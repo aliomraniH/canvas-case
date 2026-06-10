@@ -96,3 +96,13 @@ anything a failure.
   Reusable lesson: a selector-stable assertion script turns "the DOM must be
   identical after the refactor" from a claim into a 3-minute check.
 - **Tiers 3–5:** not needed; no failures, no new tooling.
+
+## Console-noise friction item — CLOSED (2026-06-10)
+
+The v0.2 friction note above ("worth adding to the skill's mode playbook as a
+documented noise allowlist") is now resolved: the debug-capture console-mode
+playbook gained a required "plugin attribution" step — classify every console
+entry by origin frame (`plugin` | `host` | `unknown`, recorded per entry in
+`console_log.json`), assert only on plugin-attributable errors, route
+ambiguous entries to the brief for human judgment. This is maintenance of an
+existing mode (in-scope for the playbook file), not a new capability.
