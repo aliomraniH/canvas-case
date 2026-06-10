@@ -390,6 +390,16 @@ Screenshots from all sessions are uploaded here. Use as visual history.
 
 ## Installed tools
 
+**Session-lifecycle skills (installed 2026-06-10):**
+- `~/.claude/skills/build-discipline/` — read at SESSION START of any build /
+  verify / test / debug / deploy session; its five gates + known-facts list
+  govern the session. The fast path for environment facts; this file stays
+  the canonical record.
+- `~/.claude/skills/deploy-report/` — run at DEPLOY CLOSE; generates the
+  self-contained HTML release report into `extensions/deploy_reports/`
+  (committed, one file per version) and satisfies items 1–2 of
+  build-discipline's session-end checklist.
+
 **`node_modules/` (Playwright):**
 ```
 .workspace_state/debug/2026-06-09T14-00-00Z_full/node_modules/
