@@ -18,8 +18,80 @@
     padding: 16px;
     border: 1px solid #d4d4d4;
     border-radius: 6px;
+    background: #fff;
   }
   .cm-hint { font-size: 11px; color: #99a3ad; margin-top: 6px; }
+
+  /* StatsBar — velocity figure + flag badges (v0.2 E3/E4) */
+  .cm-statsbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 10px 14px;
+    margin-bottom: 10px;
+    border: 1px solid #e4e7eb;
+    border-radius: 6px;
+    background: #f8fafc;
+  }
+  .cm-velocity-value {
+    font-size: 26px;
+    font-weight: 700;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+  }
+  .cm-velocity-label {
+    font-size: 11px;
+    color: #8b95a1;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-top: 2px;
+  }
+  .cm-badges {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+    max-width: 420px;
+  }
+  .cm-badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .cm-badge-amber { background: #fdf1d7; color: #8a5a00; border: 1px solid #ecc55f; }
+  .cm-badge-red   { background: #fbe4e4; color: #a02525; border: 1px solid #e58c8c; }
+  .cm-flag-message { font-size: 12px; color: #5a646e; text-align: right; }
+
+  /* Legend (v0.2 E2) */
+  .cm-legend {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    color: #5a646e;
+    margin-top: 8px;
+  }
+  .cm-legend-swatch {
+    width: 18px; height: 10px;
+    background: rgba(91, 134, 173, 0.18);
+    border-radius: 2px;
+  }
+
+  /* Degraded-state note (v0.2 E4) */
+  .cm-data-note {
+    margin-top: 8px;
+    padding: 6px 10px;
+    font-size: 12px;
+    color: #6b7785;
+    background: #f4f6f8;
+    border-left: 3px solid #c3ccd5;
+    border-radius: 0 4px 4px 0;
+  }
 
   /* Diagnostics overlay (hidden until Shift+D) */
   #cm-diagnostics {
@@ -50,8 +122,14 @@
     <div class="cm-title">Weight Trajectory</div>
     <div class="cm-subtitle">% total body weight loss (TBWL) vs. baseline</div>
   </div>
+  <div id="cm-statsbar" class="cm-statsbar" style="display:none;"></div>
   <div class="cm-chart-card">
     <div id="cm-chart"></div>
+    <div id="cm-legend" class="cm-legend" style="display:none;">
+      <span class="cm-legend-swatch"></span>
+      <span id="cm-legend-text"></span>
+    </div>
+    <div id="cm-data-note" class="cm-data-note" style="display:none;"></div>
     <div class="cm-hint">Hover a point for details. Press <strong>Shift+D</strong> for diagnostics.</div>
   </div>
 </div>
@@ -68,7 +146,7 @@
 // ───────────────────────────────────────────────────────────────
 const CM_SIZE = {
   width: 700, height: 420,
-  marginTop: 24, marginRight: 70, marginBottom: 40, marginLeft: 56,
+  marginTop: 24, marginRight: 86, marginBottom: 40, marginLeft: 56,
 };
 
 // Shared rendering context populated by ChartScaffold.init()
@@ -117,7 +195,58 @@ const DiagnosticsPanel = {
 };
 
 // ───────────────────────────────────────────────────────────────
-// 1. ChartScaffold — SVG canvas + axes. Runs first.
+// 0. StatsBar — velocity stat + flag badges above the chart (v0.2).
+//    Pure HTML; all values precomputed server-side.
+// ───────────────────────────────────────────────────────────────
+const StatsBar = {
+  _data: null,
+  _loadedAt: null,
+  _isInitialized: false,
+
+  render(chartData) {
+    this._isInitialized = true;
+    this._data = chartData || {};
+    this._loadedAt = new Date().toISOString();
+    console.log(`[StatsBar] render() at ${this._loadedAt}`);
+
+    const bar = document.getElementById('cm-statsbar');
+    if (!bar) return;
+    const stats = this._data.velocity_stats || {};
+    const flags = Array.isArray(this._data.flags) ? this._data.flags : [];
+
+    const badgeHtml = flags.map(f => {
+      const sev = f.severity === 'red' ? 'cm-badge-red' : 'cm-badge-amber';
+      return `<span class="cm-badge ${sev}" data-flag="${f.key}">${f.label}</span>` +
+             `<span class="cm-flag-message">${f.message}</span>`;
+    }).join('');
+
+    bar.innerHTML =
+      `<div class="cm-velocity">` +
+      `<div class="cm-velocity-value" id="cm-velocity-value">${stats.display || '—'}</div>` +
+      `<div class="cm-velocity-label">${stats.window_weeks || 4}-week velocity</div>` +
+      `</div>` +
+      `<div class="cm-badges">${badgeHtml}</div>`;
+    bar.style.display = 'flex';
+
+    DiagnosticsPanel.recordTimestamp('StatsBar.render', this._loadedAt);
+  },
+
+  refresh() {
+    if (!this._data) { console.warn('[StatsBar] refresh() with no data'); return; }
+    this.render(this._data);
+  },
+
+  destroy() {
+    const bar = document.getElementById('cm-statsbar');
+    if (bar) { bar.innerHTML = ''; bar.style.display = 'none'; }
+    this._data = null; this._isInitialized = false;
+  },
+};
+
+// ───────────────────────────────────────────────────────────────
+// 1. ChartScaffold — SVG canvas + axes + fixed z-order layer groups.
+//    Group order guarantees the band renders behind everything else
+//    regardless of which layer refreshes last.
 // ───────────────────────────────────────────────────────────────
 const ChartScaffold = {
   _data: null,
@@ -144,10 +273,19 @@ const ChartScaffold = {
     CM.x = d3.scaleTime().range([CM_SIZE.marginLeft, CM_SIZE.width - CM_SIZE.marginRight]);
     CM.y = d3.scaleLinear().range([CM_SIZE.height - CM_SIZE.marginBottom, CM_SIZE.marginTop]);
 
+    CM.svg.append('g').attr('class', 'cm-grid');
     CM.svg.append('g').attr('class', 'cm-x-axis')
       .attr('transform', `translate(0,${CM_SIZE.height - CM_SIZE.marginBottom})`);
     CM.svg.append('g').attr('class', 'cm-y-axis')
       .attr('transform', `translate(${CM_SIZE.marginLeft},0)`);
+
+    // Fixed z-order: band < baseline < milestones < series < annotation < tooltip.
+    CM.svg.append('g').attr('class', 'cm-layer-band');
+    CM.svg.append('g').attr('class', 'cm-layer-baseline');
+    CM.svg.append('g').attr('class', 'cm-layer-milestones');
+    CM.svg.append('g').attr('class', 'cm-layer-series');
+    CM.svg.append('g').attr('class', 'cm-layer-annotation');
+    CM.svg.append('g').attr('class', 'cm-layer-tooltip');
 
     mount.append(CM.svg.node());
     DiagnosticsPanel.recordTimestamp('ChartScaffold.init', this._loadedAt);
@@ -164,6 +302,14 @@ const ChartScaffold = {
     const baseline = BaselineLayer._data ? +BaselineLayer._data.value_lbs : null;
     if (baseline != null) weights.push(baseline);
 
+    // The expected band participates in the y-domain (it is plotted data);
+    // milestone lines deliberately do NOT (suppression rule, server-mirrored).
+    const bandPoints = (ExpectedBandLayer._data && ExpectedBandLayer._data.points) || [];
+    bandPoints.forEach(p => {
+      if (p.lower_lbs != null) weights.push(+p.lower_lbs);
+      if (p.upper_lbs != null) weights.push(+p.upper_lbs);
+    });
+
     if (dates.length) {
       CM.x.domain(d3.extent(dates));
     } else {
@@ -178,7 +324,14 @@ const ChartScaffold = {
       CM.y.domain([0, 1]);
     }
 
-    CM.svg.select('.cm-x-axis').call(d3.axisBottom(CM.x).ticks(6).tickSizeOuter(0));
+    CM.svg.select('.cm-x-axis').call(d3.axisBottom(CM.x).ticks(6).tickSizeOuter(0))
+      .call(g => {
+        g.selectAll('.cm-x-label').remove();
+        g.append('text').attr('class', 'cm-x-label')
+          .attr('x', CM_SIZE.width - CM_SIZE.marginRight).attr('y', 34)
+          .attr('fill', 'currentColor').attr('text-anchor', 'end')
+          .text('Visit date');
+      });
     CM.svg.select('.cm-y-axis').call(d3.axisLeft(CM.y).ticks(6))
       .call(g => {
         g.selectAll('.cm-y-label').remove();
@@ -187,6 +340,17 @@ const ChartScaffold = {
           .attr('fill', 'currentColor').attr('text-anchor', 'start')
           .text('Weight (lbs)');
       });
+
+    // Subtle horizontal gridlines (E4). Plain SVG lines, not axis ticks, so
+    // the Tier-2 `line[stroke-dasharray]` selector stays unambiguous.
+    const grid = CM.svg.select('.cm-grid');
+    grid.selectAll('line').remove();
+    CM.y.ticks(6).forEach(t => {
+      grid.append('line')
+        .attr('x1', CM_SIZE.marginLeft).attr('x2', CM_SIZE.width - CM_SIZE.marginRight)
+        .attr('y1', CM.y(t)).attr('y2', CM.y(t))
+        .attr('stroke', '#eceff2').attr('stroke-width', 1);
+    });
 
     DiagnosticsPanel.recordTimestamp('ChartScaffold.render', this._loadedAt);
   },
@@ -204,7 +368,78 @@ const ChartScaffold = {
 };
 
 // ───────────────────────────────────────────────────────────────
-// 2. BaselineLayer — horizontal dashed line at baseline weight.
+// 2. ExpectedBandLayer — expected-response corridor (v0.2 E2).
+//    Low-opacity area fill, no stroke, behind the patient line.
+// ───────────────────────────────────────────────────────────────
+const ExpectedBandLayer = {
+  _data: null,
+  _loadedAt: null,
+  _isInitialized: false,
+
+  init() {
+    this._isInitialized = true;
+    this._loadedAt = new Date().toISOString();
+    DiagnosticsPanel.recordTimestamp('ExpectedBandLayer.init', this._loadedAt);
+  },
+
+  render(data) {
+    if (!this._isInitialized) this.init();
+    this._data = data || null;
+    this._loadedAt = new Date().toISOString();
+    console.log(`[ExpectedBandLayer] render() at ${this._loadedAt}`);
+
+    ChartScaffold.render(ChartScaffold._data);
+
+    const g = CM.svg.select('.cm-layer-band');
+    g.selectAll('*').remove();
+
+    const pts = ((this._data && this._data.points) || [])
+      .map(p => ({ ...p, _date: cmParseDate(p.date) }))
+      .filter(p => p._date);
+
+    if (pts.length >= 2) {
+      // lower_pct (less loss) = higher weight = visual top of the corridor.
+      const area = d3.area()
+        .x(p => CM.x(p._date))
+        .y0(p => CM.y(+p.lower_lbs))
+        .y1(p => CM.y(+p.upper_lbs));
+      g.append('path')
+        .attr('class', 'cm-band-fill')
+        .attr('fill', 'rgba(91, 134, 173, 0.18)')
+        .attr('stroke', 'none')
+        .attr('d', area(pts));
+    }
+
+    // Legend below the chart (HTML, not SVG).
+    const legend = document.getElementById('cm-legend');
+    const legendText = document.getElementById('cm-legend-text');
+    if (legend && legendText) {
+      const cfg = CM.config || {};
+      if (pts.length >= 2 && cfg.legend_text) {
+        legendText.textContent = cfg.legend_text;
+        legend.style.display = 'flex';
+      } else {
+        legend.style.display = 'none';
+      }
+    }
+
+    DiagnosticsPanel.recordTimestamp('ExpectedBandLayer.render', this._loadedAt);
+  },
+
+  refresh() {
+    if (!this._data) { console.warn('[ExpectedBandLayer] refresh() with no data'); return; }
+    console.log('[ExpectedBandLayer] refresh()');
+    this.render(this._data);
+  },
+
+  destroy() {
+    if (CM.svg) CM.svg.select('.cm-layer-band').selectAll('*').remove();
+    this._data = null; this._isInitialized = false;
+  },
+};
+
+// ───────────────────────────────────────────────────────────────
+// 3. BaselineLayer — horizontal dashed line at baseline weight.
 // ───────────────────────────────────────────────────────────────
 const BaselineLayer = {
   _data: null,
@@ -227,15 +462,16 @@ const BaselineLayer = {
     ChartScaffold.render(ChartScaffold._data);
 
     const value = data ? +(data.value_lbs != null ? data.value_lbs : data.value) : null;
-    CM.svg.selectAll('.cm-baseline').remove();
+    const g = CM.svg.select('.cm-layer-baseline');
+    g.selectAll('*').remove();
     if (value != null && CM.y) {
       const yPos = CM.y(value);
-      const g = CM.svg.append('g').attr('class', 'cm-baseline');
-      g.append('line')
+      const inner = g.append('g').attr('class', 'cm-baseline');
+      inner.append('line')
         .attr('x1', CM_SIZE.marginLeft).attr('x2', CM_SIZE.width - CM_SIZE.marginRight)
         .attr('y1', yPos).attr('y2', yPos)
         .attr('stroke', '#f797b9').attr('stroke-width', 2).attr('stroke-dasharray', '6 4');
-      g.append('text')
+      inner.append('text')
         .attr('x', CM_SIZE.width - CM_SIZE.marginRight + 4).attr('y', yPos)
         .attr('dy', '0.35em').attr('font-size', '11px').attr('fill', '#c44d76')
         .text(`Baseline ${value.toFixed(1)} lb`);
@@ -250,18 +486,78 @@ const BaselineLayer = {
   },
 
   destroy() {
-    if (CM.svg) CM.svg.selectAll('.cm-baseline').remove();
+    if (CM.svg) CM.svg.select('.cm-layer-baseline').selectAll('*').remove();
     this._data = null; this._isInitialized = false;
   },
 };
 
 // ───────────────────────────────────────────────────────────────
-// 3. DataPointLayer — patient weight line + dots over calendar dates.
+// 4. MilestoneLayer — %TBWL milestone reference lines (v0.2 E1).
+//    Server-side suppression decided which lines arrive here; this
+//    layer draws exactly what it is given.
+// ───────────────────────────────────────────────────────────────
+const MilestoneLayer = {
+  _data: null,
+  _loadedAt: null,
+  _isInitialized: false,
+
+  init() {
+    this._isInitialized = true;
+    this._loadedAt = new Date().toISOString();
+    DiagnosticsPanel.recordTimestamp('MilestoneLayer.init', this._loadedAt);
+  },
+
+  render(data) {
+    if (!this._isInitialized) this.init();
+    this._data = Array.isArray(data) ? data : [];
+    this._loadedAt = new Date().toISOString();
+    console.log(`[MilestoneLayer] render() at ${this._loadedAt} (${this._data.length} lines)`);
+
+    ChartScaffold.render(ChartScaffold._data);
+
+    const g = CM.svg.select('.cm-layer-milestones');
+    g.selectAll('*').remove();
+
+    this._data.forEach(m => {
+      const yPos = CM.y(+m.weight_lbs);
+      const inner = g.append('g').attr('class', 'cm-milestone').attr('data-pct', m.pct);
+      inner.append('line')
+        .attr('x1', CM_SIZE.marginLeft).attr('x2', CM_SIZE.width - CM_SIZE.marginRight)
+        .attr('y1', yPos).attr('y2', yPos)
+        .attr('stroke', m.crossed ? '#1f8a4c' : '#9aa5b1')
+        .attr('stroke-width', 1.25)
+        .attr('stroke-dasharray', '4 4')
+        .attr('opacity', 0.9);
+      inner.append('text')
+        .attr('x', CM_SIZE.width - CM_SIZE.marginRight + 4).attr('y', yPos)
+        .attr('dy', '0.35em').attr('font-size', '11px')
+        .attr('fill', m.crossed ? '#1f8a4c' : '#7b8794')
+        .text(m.label);
+    });
+
+    DiagnosticsPanel.recordTimestamp('MilestoneLayer.render', this._loadedAt);
+  },
+
+  refresh() {
+    if (!this._data) { console.warn('[MilestoneLayer] refresh() with no data'); return; }
+    console.log('[MilestoneLayer] refresh()');
+    this.render(this._data);
+  },
+
+  destroy() {
+    if (CM.svg) CM.svg.select('.cm-layer-milestones').selectAll('*').remove();
+    this._data = null; this._isInitialized = false;
+  },
+};
+
+// ───────────────────────────────────────────────────────────────
+// 5. DataPointLayer — patient weight line + dots over calendar dates.
 // ───────────────────────────────────────────────────────────────
 const DataPointLayer = {
   _data: null,
   _loadedAt: null,
   _isInitialized: false,
+  _animated: false,
 
   init() {
     this._isInitialized = true;
@@ -283,20 +579,56 @@ const DataPointLayer = {
       .filter(d => d._date)
       .sort((a, b) => a._date - b._date);
 
-    CM.svg.selectAll('.cm-series').remove();
-    const g = CM.svg.append('g').attr('class', 'cm-series');
+    const g = CM.svg.select('.cm-layer-series');
+    g.selectAll('*').remove();
+    const inner = g.append('g').attr('class', 'cm-series');
 
     const line = d3.line().x(d => CM.x(d._date)).y(d => CM.y(d._w));
-    g.append('path')
+    inner.append('path')
+      .attr('class', 'cm-series-path')
       .attr('fill', 'none').attr('stroke', '#3b8fcf').attr('stroke-width', 2.5)
       .attr('stroke-linejoin', 'round').attr('stroke-linecap', 'round')
       .attr('d', line(pts));
 
-    g.selectAll('circle').data(pts).join('circle')
+    inner.selectAll('circle').data(pts).join('circle')
       .attr('cx', d => CM.x(d._date)).attr('cy', d => CM.y(d._w))
       .attr('r', 4).attr('fill', '#3b8fcf');
 
+    // Degraded-state notes (E4): single measurement / sparse series.
+    const note = document.getElementById('cm-data-note');
+    if (note) {
+      if (pts.length === 1) {
+        note.textContent = 'Single measurement — the trajectory will appear once the next weight is recorded.';
+        note.style.display = 'block';
+      } else if (pts.length === 2 || (pts.length > 2 &&
+          ((pts[pts.length - 1]._date - pts[0]._date) / 86400000) / (pts.length - 1) > 30)) {
+        note.textContent = 'Sparse data — trends between distant measurements are interpolated; interpretation limited.';
+        note.style.display = 'block';
+      } else {
+        note.style.display = 'none';
+      }
+    }
+
     DiagnosticsPanel.recordTimestamp('DataPointLayer.render', this._loadedAt);
+  },
+
+  // Draw-in animation (E4), called ONCE after the final refresh pass so the
+  // animated path is not replaced mid-flight. Dash trick on the path; the
+  // attributes are removed at the end so no stray dasharray persists (and the
+  // Tier-2 `line[stroke-dasharray]` selector never matches a path anyway).
+  animateIn() {
+    if (this._animated || !CM.svg) return;
+    const path = CM.svg.select('.cm-layer-series .cm-series-path');
+    if (path.empty() || !path.node().getTotalLength) return;
+    const total = path.node().getTotalLength();
+    if (!total) return;
+    this._animated = true;
+    path
+      .attr('stroke-dasharray', `${total} ${total}`)
+      .attr('stroke-dashoffset', total)
+      .transition().duration(700).ease(d3.easeCubicOut)
+      .attr('stroke-dashoffset', 0)
+      .on('end', () => path.attr('stroke-dasharray', null).attr('stroke-dashoffset', null));
   },
 
   refresh() {
@@ -306,13 +638,13 @@ const DataPointLayer = {
   },
 
   destroy() {
-    if (CM.svg) CM.svg.selectAll('.cm-series').remove();
-    this._data = null; this._isInitialized = false;
+    if (CM.svg) CM.svg.select('.cm-layer-series').selectAll('*').remove();
+    this._data = null; this._isInitialized = false; this._animated = false;
   },
 };
 
 // ───────────────────────────────────────────────────────────────
-// 4. AnnotationLayer — % TBWL label at the latest data point.
+// 6. AnnotationLayer — % TBWL label at the latest data point.
 // ───────────────────────────────────────────────────────────────
 const AnnotationLayer = {
   _data: null,
@@ -331,7 +663,8 @@ const AnnotationLayer = {
     this._loadedAt = new Date().toISOString();
     console.log(`[AnnotationLayer] render() at ${this._loadedAt}`);
 
-    CM.svg.selectAll('.cm-annotation').remove();
+    const g = CM.svg.select('.cm-layer-annotation');
+    g.selectAll('*').remove();
     const points = DataPointLayer._data || [];
     if (data && points.length) {
       const last = points
@@ -344,8 +677,8 @@ const AnnotationLayer = {
         // Clinical convention: positive TBWL = weight lost → show ↓ (good, green)
         //                      negative TBWL = weight gained → show ↑ (concern, red)
         const arrow = pct >= 0 ? '↓' : '↑';
-        const g = CM.svg.append('g').attr('class', 'cm-annotation');
-        g.append('text')
+        const inner = g.append('g').attr('class', 'cm-annotation');
+        inner.append('text')
           .attr('x', CM.x(last._date)).attr('y', CM.y(last._w) - 14)
           .attr('text-anchor', 'middle').attr('font-size', '13px').attr('font-weight', 'bold')
           .attr('fill', pct >= 0 ? '#1f8a4c' : '#c0392b')
@@ -362,13 +695,13 @@ const AnnotationLayer = {
   },
 
   destroy() {
-    if (CM.svg) CM.svg.selectAll('.cm-annotation').remove();
+    if (CM.svg) CM.svg.select('.cm-layer-annotation').selectAll('*').remove();
     this._data = null; this._isInitialized = false;
   },
 };
 
 // ───────────────────────────────────────────────────────────────
-// 5. TooltipManager — hover tooltip. Event-driven, no render().
+// 7. TooltipManager — hover tooltip. Event-driven, no render().
 // ───────────────────────────────────────────────────────────────
 const TooltipManager = {
   _data: null,
@@ -382,7 +715,9 @@ const TooltipManager = {
     this._loadedAt = new Date().toISOString();
     console.log(`[TooltipManager] init() at ${this._loadedAt}`);
 
-    this._tip = CM.svg.append('g').attr('class', 'cm-tooltip').attr('display', 'none');
+    const layer = CM.svg.select('.cm-layer-tooltip');
+    layer.selectAll('*').remove();
+    this._tip = layer.append('g').attr('class', 'cm-tooltip').attr('display', 'none');
     this._tip.append('circle').attr('r', 5).attr('fill', '#0f619f');
     this._tip.append('text').attr('text-anchor', 'middle').attr('y', -26)
       .attr('font-size', '11px').attr('fill', '#1f2933');
@@ -406,7 +741,7 @@ const TooltipManager = {
     this._tip.attr('display', null)
       .attr('transform', `translate(${CM.x(p._date)},${CM.y(p._w)})`);
     this._tip.select('text')
-      .text(`${p.date_label}: ${(+p.value_lbs).toFixed(1)} lb (${(+p.tbwl_pct).toFixed(1)}%)`);
+      .text(`${p.date_label}: ${(+p.value_lbs).toFixed(1)} lb (${(+p.tbwl_pct).toFixed(1)}% TBWL)`);
   },
 
   refresh() {
@@ -428,18 +763,25 @@ const TooltipManager = {
 document.addEventListener('DOMContentLoaded', () => {
   const chartData = JSON.parse('{{ chart_data_json|escapejs }}');
 
+  StatsBar.render(chartData);
   ChartScaffold.init(chartData.chart_config);
+  ExpectedBandLayer.render(chartData.expected_band);
   BaselineLayer.render(chartData.baseline_data);
+  MilestoneLayer.render(chartData.milestones);
   DataPointLayer.render(chartData.datapoints);
   AnnotationLayer.render(chartData.latest_annotation);
   TooltipManager.init(chartData.datapoints);
 
-  // Re-render the visual layers now that all data is present so axes/baseline
-  // reflect the full dataset.
+  // Re-render the visual layers now that all data is present so axes, band,
+  // and reference lines reflect the full dataset. Z-order is fixed by the
+  // scaffold's layer groups, so refresh order no longer affects stacking.
   ChartScaffold.refresh();
+  ExpectedBandLayer.refresh();
   BaselineLayer.refresh();
+  MilestoneLayer.refresh();
   DataPointLayer.refresh();
   AnnotationLayer.refresh();
+  DataPointLayer.animateIn();
 
   // Record Python-side pipeline timestamps.
   Object.entries(chartData._pipeline_timestamps || {}).forEach(([k, v]) => {
@@ -457,13 +799,17 @@ document.addEventListener('DOMContentLoaded', () => {
 // Debug hooks exposed on window.
 // ───────────────────────────────────────────────────────────────
 window.refreshComponent = function (name) {
-  const components = { ChartScaffold, BaselineLayer, DataPointLayer, AnnotationLayer };
+  const components = {
+    StatsBar, ChartScaffold, ExpectedBandLayer, BaselineLayer,
+    MilestoneLayer, DataPointLayer, AnnotationLayer,
+  };
   if (!components[name]) { console.error(`Unknown component: ${name}`); return; }
   console.log(`[DEBUG] Refreshing ${name}`);
   components[name].refresh();
 };
 
 window.refreshAll = function () {
-  [ChartScaffold, BaselineLayer, DataPointLayer, AnnotationLayer].forEach(c => c.refresh());
+  [StatsBar, ChartScaffold, ExpectedBandLayer, BaselineLayer,
+   MilestoneLayer, DataPointLayer, AnnotationLayer].forEach(c => c.refresh());
 };
 </script>

@@ -20,13 +20,13 @@ Organized into five layers (see component_architecture.md):
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from canvas_sdk.effects import Effect
 from canvas_sdk.effects.launch_modal import LaunchModalEffect
 from canvas_sdk.handlers.action_button import ActionButton, SHOW_BUTTON_REGEX
 from canvas_sdk.templates import render_to_string
-from canvas_sdk.v1.data import Patient, Observation, Note
+from canvas_sdk.v1.data import Patient, Observation, Note, Medication
 
 try:
     # Canvas sandbox provides the runtime logger.
@@ -55,6 +55,84 @@ _WEIGHT_TO_LBS = {
     "kg": 2.20462,
     "oz": 1.0 / 16.0,
     "g": 0.00220462,
+}
+
+# ─── v0.2 constants (E1 milestones, E2 expected band, E3 velocity/flags) ───
+
+MILESTONE_PCTS = (5.0, 10.0, 15.0)
+
+DEFAULT_AGENT = "semaglutide_step1"
+
+# Agent detection (A3): lower-case substring match against active-medication
+# coding display text. Generic + US brand names per agent.
+GLP1_AGENT_KEYWORDS = {
+    "semaglutide_step1": ("semaglutide", "wegovy", "ozempic"),
+    "tirzepatide_surmount1": ("tirzepatide", "zepbound", "mounjaro"),
+    "liraglutide_scale": ("liraglutide", "saxenda", "victoza"),
+}
+
+# Expected %TBWL corridors, (week, lower_pct, upper_pct) per agent.
+# lower_pct = least expected loss (5th pct), upper_pct = most (95th pct).
+# Sources (see glp1_science_reference.md / assumptions_tests_rationale.md):
+#   STEP-1     Wilding et al., NEJM 2021;384:989-1002
+#   SURMOUNT-1 Jastreboff et al., NEJM 2022;387:205-216 (15 mg arm)
+#   SCALE      Pi-Sunyer et al., NEJM 2015;373:11-22 — means only published;
+#              bounds synthesized at mean x0.5 / x1.5 (the relative spread the
+#              STEP-1 and SURMOUNT-1 percentile columns show). Approximation.
+EXPECTED_RESPONSE_BANDS = {
+    "semaglutide_step1": {
+        "label": "STEP-1",
+        "points": (
+            (0, 0.0, 0.0), (4, 0.5, 4.5), (8, 1.0, 7.0), (12, 2.0, 11.0),
+            (16, 3.0, 13.5), (20, 4.0, 15.0), (24, 5.0, 16.5), (36, 6.0, 19.0),
+            (52, 7.0, 21.0), (68, 7.5, 22.0),
+        ),
+    },
+    "tirzepatide_surmount1": {
+        "label": "SURMOUNT-1",
+        "points": (
+            (0, 0.0, 0.0), (4, 0.8, 5.5), (8, 2.0, 10.0), (12, 3.5, 14.5),
+            (16, 5.0, 18.0), (24, 8.0, 22.0), (36, 10.0, 26.0),
+            (52, 12.0, 28.5), (72, 13.0, 31.0),
+        ),
+    },
+    "liraglutide_scale": {
+        "label": "SCALE",
+        "points": (
+            (0, 0.0, 0.0), (12, 2.1, 6.3), (24, 3.2, 9.6),
+            (40, 3.9, 11.7), (56, 4.2, 12.6),
+        ),
+    },
+}
+
+VELOCITY_WINDOW_WEEKS = 4.0
+VELOCITY_MIN_SPAN_DAYS = 14.0
+PLATEAU_WINDOW_WEEKS = 8.0
+PLATEAU_MIN_WEEK = 8.0          # plateau/regain evaluated only after week 8
+PLATEAU_ABS_DELTA_PCT = 0.5     # |ΔTBWL| over trailing 8 wk below this = plateau
+REGAIN_DELTA_PCT = -0.5         # ΔTBWL at or below this over trailing 8 wk = regain
+RAPID_VELOCITY_PCT_PER_WEEK = 1.0
+
+# Informational decision support only — copy is descriptive, never directive.
+FLAG_DEFINITIONS = {
+    "plateau": {
+        "key": "plateau",
+        "label": "Plateau",
+        "severity": "amber",
+        "message": "Weight loss has slowed — consider reviewing dose/adherence.",
+    },
+    "regain": {
+        "key": "regain",
+        "label": "Regain",
+        "severity": "amber",
+        "message": "Weight is trending upward over the last 8 weeks — consider reviewing adherence and follow-up.",
+    },
+    "rapid_loss": {
+        "key": "rapid_loss",
+        "label": "Rapid loss",
+        "severity": "red",
+        "message": "Weight loss has exceeded 1.0% per week over the last 4 weeks — consider reviewing nutrition and tolerability.",
+    },
 }
 
 
@@ -175,6 +253,53 @@ def attach_dates_to_observations(
         enriched["datetime_of_service"] = dos
         joined.append(enriched)
     return joined
+
+
+def detect_glp1_agent(patient_id: str) -> str:
+    """Detect which GLP-1 agent the patient is on, for expected-band selection.
+
+    Matches active-medication coding display text against GLP1_AGENT_KEYWORDS.
+    Exactly one agent matched → that agent. No match, multiple matches, or ANY
+    query/schema error → DEFAULT_AGENT with the fallback reason logged.
+
+    The broad except is a deliberate addendum requirement: a medication-model
+    schema surprise must degrade to the default band, never crash the chart.
+    Field access verified against canvas_sdk 0.163.1 source + docs:
+    Medication.objects.for_patient(id).active(); med.codings.all() → .display.
+    """
+    try:
+        medications = Medication.objects.for_patient(patient_id).active()
+        matched: set[str] = set()
+        for med in medications:
+            texts: list[str] = []
+            codings = getattr(med, "codings", None)
+            if codings is not None:
+                for coding in codings.all():
+                    display = getattr(coding, "display", None)
+                    if display:
+                        texts.append(str(display).lower())
+            for agent, keywords in GLP1_AGENT_KEYWORDS.items():
+                if any(kw in text for text in texts for kw in keywords):
+                    matched.add(agent)
+        if len(matched) == 1:
+            return next(iter(matched))
+        if matched:
+            log.warning(
+                "Multiple GLP-1 agents matched for patient %s (%s); defaulting to %s",
+                patient_id, sorted(matched), DEFAULT_AGENT,
+            )
+        else:
+            log.info(
+                "No GLP-1 medication matched for patient %s; defaulting to %s",
+                patient_id, DEFAULT_AGENT,
+            )
+        return DEFAULT_AGENT
+    except Exception as exc:  # degrade to default band — never block the chart
+        log.warning(
+            "Medication lookup failed for patient %s (%s: %s); defaulting to %s",
+            patient_id, type(exc).__name__, exc, DEFAULT_AGENT,
+        )
+        return DEFAULT_AGENT
 
 
 # ─────────────────────────────────────────────────────────────
@@ -345,7 +470,262 @@ def build_observation_processed(obs_raw, baseline: dict) -> dict:
     }
 
 
-def build_chart_data(observations_raw: list, notes_or_baseline=None) -> dict:
+# ── v0.2 pure functions ──
+
+
+def dedupe_same_day(observations_with_dates: list) -> list:
+    """Collapse same-calendar-day observations into one averaged point (A6).
+
+    Decision: average (not latest-wins) — deterministic regardless of row
+    order (Observation ids are UUIDs, so "latest" has no reliable tie-break
+    when entries share a datetime_of_service) and damps re-measurement noise.
+    Mixed units on the same day are averaged in lbs and emitted as 'lbs'.
+    Observations without a date pass through untouched.
+    """
+    groups: dict = {}
+    order: list = []
+    passthrough: list = []
+    for obs in observations_with_dates:
+        dt = _obs_date(obs)
+        if dt is None:
+            passthrough.append(obs)
+            continue
+        day = dt.date() if hasattr(dt, "date") else dt
+        if day not in groups:
+            groups[day] = []
+            order.append(day)
+        groups[day].append(obs)
+
+    out: list = []
+    for day in order:
+        group = groups[day]
+        if len(group) == 1:
+            out.append(group[0])
+            continue
+        lbs_values = [convert_weight_to_lbs(_obs_value(o), _obs_unit(o)) for o in group]
+        first = group[0]
+        merged = {
+            "id": _obs_id(first),
+            "value_original": sum(lbs_values) / len(lbs_values),
+            "unit_original": "lbs",
+            "canvas_note_id": (
+                first.get("canvas_note_id") if isinstance(first, dict) else _note_id_of(first)
+            ),
+            "datetime_of_service": min(
+                _obs_date(o) for o in group
+            ),
+            "_loaded_at": first.get("_loaded_at") if isinstance(first, dict) else None,
+            "deduped_from": [_obs_id(o) for o in group],
+        }
+        out.append(merged)
+    return out + passthrough
+
+
+def _axis_domain(weights_lbs: list) -> tuple | None:
+    """The y-domain the chart will use, replicating templates/chart.html:
+    pad = max((hi - lo) * 0.1, 2). Conservative vs d3 `.nice()`, which may
+    round the rendered domain slightly outward — documented as intentional.
+    """
+    weights = [float(w) for w in weights_lbs if w is not None]
+    if not weights:
+        return None
+    lo, hi = min(weights), max(weights)
+    pad = max((hi - lo) * 0.1, 2.0)
+    return (lo - pad, hi + pad)
+
+
+def compute_milestone_lines(
+    baseline_lbs: float,
+    axis_weights_lbs: list,
+    latest_tbwl_pct: float | None = None,
+) -> list[dict]:
+    """E1: 5/10/15% TBWL reference lines, suppressed outside the y-domain.
+
+    `axis_weights_lbs` must be everything that drives the axis: datapoints,
+    baseline, and expected-band edge weights. Milestones never widen the axis.
+    """
+    if baseline_lbs is None or float(baseline_lbs) <= 0:
+        return []
+    domain = _axis_domain(axis_weights_lbs)
+    if domain is None:
+        return []
+    lines: list[dict] = []
+    for pct in MILESTONE_PCTS:
+        weight = float(baseline_lbs) * (1.0 - pct / 100.0)
+        if domain[0] <= weight <= domain[1]:
+            lines.append({
+                "pct": pct,
+                "weight_lbs": weight,
+                "label": f"{pct:g}% TBWL",
+                "crossed": latest_tbwl_pct is not None and float(latest_tbwl_pct) >= pct,
+            })
+    return lines
+
+
+def _interp_band_at_week(table: tuple, week: float) -> tuple:
+    """Linear interpolation of (week, lower_pct, upper_pct) rows; clamps outside."""
+    if week <= table[0][0]:
+        return (table[0][1], table[0][2])
+    if week >= table[-1][0]:
+        return (table[-1][1], table[-1][2])
+    for (w0, lo0, hi0), (w1, lo1, hi1) in zip(table, table[1:]):
+        if w0 <= week <= w1:
+            f = (week - w0) / (w1 - w0) if w1 > w0 else 0.0
+            return (lo0 + f * (lo1 - lo0), hi0 + f * (hi1 - hi0))
+    return (table[-1][1], table[-1][2])
+
+
+def build_expected_band(
+    baseline_lbs: float,
+    baseline_date,
+    max_weeks: float,
+    agent: str = DEFAULT_AGENT,
+) -> dict:
+    """E2: expected-response corridor, clipped to the observed week range.
+
+    Returns {"agent", "label", "points": [...]}; each point carries week, date,
+    lower/upper %TBWL and the corresponding weights. Note the inversion:
+    upper_pct (more loss) maps to the LOWER weight (upper_lbs < lower_lbs).
+    Empty points when max_weeks <= 0 (e.g. a single observation) so the band
+    never stretches the axes.
+    """
+    if agent not in EXPECTED_RESPONSE_BANDS:
+        agent = DEFAULT_AGENT
+    band_def = EXPECTED_RESPONSE_BANDS[agent]
+    result = {"agent": agent, "label": band_def["label"], "points": []}
+    if baseline_lbs is None or float(baseline_lbs) <= 0:
+        return result
+    if max_weeks is None or float(max_weeks) <= 0:
+        return result
+
+    table = band_def["points"]
+    max_weeks = float(max_weeks)
+    weeks = sorted(
+        {0.0, max_weeks} | {float(w) for (w, _lo, _hi) in table if 0 < w < max_weeks}
+    )
+    baseline_lbs = float(baseline_lbs)
+    for week in weeks:
+        lower_pct, upper_pct = _interp_band_at_week(table, week)
+        result["points"].append({
+            "week": week,
+            "date": baseline_date + timedelta(weeks=week) if baseline_date is not None else None,
+            "lower_pct": lower_pct,
+            "upper_pct": upper_pct,
+            "lower_lbs": baseline_lbs * (1.0 - lower_pct / 100.0),
+            "upper_lbs": baseline_lbs * (1.0 - upper_pct / 100.0),
+        })
+    return result
+
+
+def _dp_week(dp) -> float:
+    return float(dp.get("weeks_since_baseline"))
+
+
+def _dp_tbwl(dp) -> float:
+    return float(dp.get("tbwl_pct"))
+
+
+def _tbwl_at_week(datapoints: list[dict], week: float) -> float:
+    """Linear interpolation of tbwl_pct at `week`, clamped to the observed range."""
+    pts = sorted(datapoints, key=_dp_week)
+    if not pts:
+        raise ValueError("Cannot interpolate TBWL with zero datapoints")
+    if week <= _dp_week(pts[0]):
+        return _dp_tbwl(pts[0])
+    if week >= _dp_week(pts[-1]):
+        return _dp_tbwl(pts[-1])
+    for a, b in zip(pts, pts[1:]):
+        wa, wb = _dp_week(a), _dp_week(b)
+        if wa <= week <= wb:
+            if wb == wa:
+                return _dp_tbwl(b)
+            f = (week - wa) / (wb - wa)
+            return _dp_tbwl(a) + f * (_dp_tbwl(b) - _dp_tbwl(a))
+    return _dp_tbwl(pts[-1])
+
+
+def _qualifies_for_velocity(pts: list[dict]) -> bool:
+    """≥2 observations spanning ≥14 days (the E3 data-quality rule)."""
+    if len(pts) < 2:
+        return False
+    span_weeks = _dp_week(pts[-1]) - _dp_week(pts[0])
+    return span_weeks * 7.0 >= VELOCITY_MIN_SPAN_DAYS
+
+
+def compute_velocity(
+    datapoints: list[dict],
+    window_weeks: float = VELOCITY_WINDOW_WEEKS,
+) -> float | None:
+    """E3: rolling %TBWL/week over the trailing window. Positive = losing.
+
+    TBWL at (last - window) is linearly interpolated between the bracketing
+    observations, so irregular visit spacing is handled. Returns None when the
+    series has <2 observations or spans <14 days.
+    """
+    pts = sorted(
+        [dp for dp in datapoints if dp.get("weeks_since_baseline") is not None],
+        key=_dp_week,
+    )
+    if not _qualifies_for_velocity(pts):
+        return None
+    end_week = _dp_week(pts[-1])
+    start_week = max(end_week - float(window_weeks), _dp_week(pts[0]))
+    if end_week <= start_week:
+        return None
+    return (_dp_tbwl(pts[-1]) - _tbwl_at_week(pts, start_week)) / (end_week - start_week)
+
+
+def build_velocity_stats(velocity_pct_per_week: float | None) -> dict:
+    """Template-facing velocity summary. Display sign: loss renders negative
+    (internal TBWL is positive-for-loss), e.g. velocity +0.6 → '-0.60%/wk'.
+    """
+    if velocity_pct_per_week is None:
+        display = "—"  # em dash
+    else:
+        display = f"{-float(velocity_pct_per_week):.2f}%/wk"
+    return {
+        "velocity_pct_per_week": velocity_pct_per_week,
+        "display": display,
+        "window_weeks": VELOCITY_WINDOW_WEEKS,
+        "_component": "velocity_stats",
+        "_loaded_at": _now_iso(),
+    }
+
+
+def detect_flags(datapoints: list[dict], velocity_pct_per_week: float | None) -> list[dict]:
+    """E3 flags: plateau, regain (A5), rapid loss. Informational only.
+
+    Plateau vs regain over the trailing 8 weeks (evaluated only after week 8):
+      |ΔTBWL| < 0.5            → plateau (truly flat)
+      ΔTBWL ≤ -0.5             → regain (weight moving UP — not a plateau)
+      ΔTBWL ≥ +0.5             → still losing, no flag
+    The absolute-value plateau test is what keeps P5-style regain from being
+    mislabeled as a plateau. Rapid loss: trailing 4-week velocity > 1.0%/wk;
+    the rolling-average window is the "sustained" test.
+    """
+    pts = sorted(
+        [dp for dp in datapoints if dp.get("weeks_since_baseline") is not None],
+        key=_dp_week,
+    )
+    flags: list[dict] = []
+    if not _qualifies_for_velocity(pts):
+        return flags
+
+    last_week = _dp_week(pts[-1])
+    if last_week > PLATEAU_MIN_WEEK:
+        window_start = max(last_week - PLATEAU_WINDOW_WEEKS, _dp_week(pts[0]))
+        delta8 = _dp_tbwl(pts[-1]) - _tbwl_at_week(pts, window_start)
+        if abs(delta8) < PLATEAU_ABS_DELTA_PCT:
+            flags.append(dict(FLAG_DEFINITIONS["plateau"]))
+        elif delta8 <= REGAIN_DELTA_PCT:
+            flags.append(dict(FLAG_DEFINITIONS["regain"]))
+
+    if velocity_pct_per_week is not None and velocity_pct_per_week > RAPID_VELOCITY_PCT_PER_WEEK:
+        flags.append(dict(FLAG_DEFINITIONS["rapid_loss"]))
+    return flags
+
+
+def build_chart_data(observations_raw: list, notes_or_baseline=None, agent: str = DEFAULT_AGENT) -> dict:
     """Orchestrate the Processing Layer and return the chart payload.
 
     Second argument is overloaded (locked Option B):
@@ -354,12 +734,16 @@ def build_chart_data(observations_raw: list, notes_or_baseline=None) -> dict:
         with datetime_of_service, or SDK-like objects). The numeric value is the
         legacy `baseline` arg and is ignored — baseline is always recomputed from
         the earliest observation.
+
+    `agent` selects the expected-response band table (v0.2 / A3); callers pass
+    detect_glp1_agent()'s result so this function stays SDK-free.
     """
     if isinstance(notes_or_baseline, dict):
         observations_with_dates = attach_dates_to_observations(observations_raw, notes_or_baseline)
     else:
         observations_with_dates = list(observations_raw)
 
+    observations_with_dates = dedupe_same_day(observations_with_dates)
     baseline = _baseline_record(observations_with_dates)
 
     datapoints = [
@@ -374,6 +758,21 @@ def build_chart_data(observations_raw: list, notes_or_baseline=None) -> dict:
 
     latest_tbwl_pct = datapoints[-1]["tbwl_pct"] if datapoints else 0.0
 
+    # v0.2 derived layers. Band only with ≥2 datapoints (a single observation
+    # has zero observed span, so the band would just stretch the axes).
+    last_week = datapoints[-1]["weeks_since_baseline"] if len(datapoints) >= 2 else 0.0
+    expected_band = build_expected_band(
+        baseline["value_lbs"], baseline["date"], last_week, agent
+    )
+    axis_weights = [dp["value_lbs"] for dp in datapoints] + [baseline["value_lbs"]]
+    for band_point in expected_band["points"]:
+        axis_weights.append(band_point["lower_lbs"])
+        axis_weights.append(band_point["upper_lbs"])
+    milestones = compute_milestone_lines(baseline["value_lbs"], axis_weights, latest_tbwl_pct)
+    velocity = compute_velocity(datapoints)
+    velocity_stats = build_velocity_stats(velocity)
+    flags = detect_flags(datapoints, velocity)
+
     now = _now_iso()
     return {
         "baseline_data": {
@@ -386,6 +785,10 @@ def build_chart_data(observations_raw: list, notes_or_baseline=None) -> dict:
         },
         "datapoints": datapoints,
         "latest_tbwl_pct": latest_tbwl_pct,
+        "milestones": milestones,
+        "expected_band": expected_band,
+        "velocity_stats": velocity_stats,
+        "flags": flags,
         "_pipeline_timestamps": {
             "demographics_loaded": now,
             "observations_loaded": now,
@@ -455,6 +858,22 @@ def validate_chart_payload(payload: dict) -> tuple[bool, list[str]]:
         if key not in payload:
             errors.append(f"Missing required template key: {key}")
 
+    # 9. v0.2 keys — shape-checked only when present, so legacy payloads
+    # (pre-0.2 callers and the byte-untouched v0.1 tests) remain valid.
+    # build_chart_data always emits them; tests assert that separately.
+    if "milestones" in payload and not isinstance(payload.get("milestones"), list):
+        errors.append("milestones must be a list")
+    if "flags" in payload and not isinstance(payload.get("flags"), list):
+        errors.append("flags must be a list")
+    if "expected_band" in payload:
+        band = payload.get("expected_band")
+        if not isinstance(band, dict) or "points" not in band or "label" not in band:
+            errors.append("expected_band malformed (needs label + points)")
+    if "velocity_stats" in payload:
+        stats = payload.get("velocity_stats")
+        if not isinstance(stats, dict) or "display" not in stats:
+            errors.append("velocity_stats malformed (needs display)")
+
     return (len(errors) == 0, errors)
 
 
@@ -468,12 +887,31 @@ def assemble_template_context(
     baseline: dict,
     datapoints: list[dict],
     pipeline_timestamps: dict,
+    milestones: list[dict] | None = None,
+    expected_band: dict | None = None,
+    velocity_stats: dict | None = None,
+    flags: list[dict] | None = None,
 ) -> dict:
     """Assemble the final context for render_to_string().
 
     Each top-level component dict carries `_component` and `_loaded_at`.
+    The v0.2 arguments are keyword-optional so v0.1 call sites (and the
+    byte-untouched v0.1 tests) keep working; defaults are valid empty states.
     """
     now = _now_iso()
+
+    if milestones is None:
+        milestones = []
+    if expected_band is None:
+        expected_band = {
+            "agent": DEFAULT_AGENT,
+            "label": EXPECTED_RESPONSE_BANDS[DEFAULT_AGENT]["label"],
+            "points": [],
+        }
+    if velocity_stats is None:
+        velocity_stats = build_velocity_stats(None)
+    if flags is None:
+        flags = []
 
     if datapoints:
         latest = datapoints[-1]
@@ -503,17 +941,23 @@ def assemble_template_context(
     timestamps["validation_passed"] = now
     timestamps["template_context_assembled"] = now
 
+    band_label = expected_band.get("label") or EXPECTED_RESPONSE_BANDS[DEFAULT_AGENT]["label"]
     return {
         "patient": {**patient, "_component": "patient_info", "_loaded_at": now},
         "baseline_data": {**baseline, "_component": "baseline_layer", "_loaded_at": now},
         "datapoints": datapoints,
         "latest_annotation": latest_annotation,
         "latest_tbwl_pct": latest_tbwl_pct,
+        "milestones": milestones,
+        "expected_band": {**expected_band, "_component": "expected_band_layer", "_loaded_at": now},
+        "velocity_stats": velocity_stats,
+        "flags": flags,
         "chart_config": {
             "x_axis_type": "calendar_date",
             "y_axis_unit": "lbs",
-            "show_benchmark_overlay": False,
-            "benchmark_source": None,
+            "show_benchmark_overlay": bool(expected_band.get("points")),
+            "benchmark_source": band_label,
+            "legend_text": f"Expected response ({band_label})",
         },
         "_pipeline_timestamps": timestamps,
     }
@@ -561,14 +1005,16 @@ class GenerateVitalsGraphs(ActionButton):
 
     def handle(self) -> list[Effect]:
         # 1. Load
-        patient = load_patient_demographics(self._patient_id())
-        obs_raw = load_weight_observations_raw(self._patient_id())
+        patient_id = self._patient_id()
+        patient = load_patient_demographics(patient_id)
+        obs_raw = load_weight_observations_raw(patient_id)
         note_ids = [o["canvas_note_id"] for o in obs_raw if o.get("canvas_note_id")]
         notes = batch_load_notes(note_ids)
+        agent = detect_glp1_agent(patient_id)
 
         # 2. Process — no usable observations is an expected, recoverable condition
         try:
-            payload = build_chart_data(obs_raw, notes)
+            payload = build_chart_data(obs_raw, notes, agent=agent)
         except ValueError as exc:
             return self._render_error([str(exc)])
 
@@ -583,12 +1029,22 @@ class GenerateVitalsGraphs(ActionButton):
             baseline=payload["baseline_data"],
             datapoints=payload["datapoints"],
             pipeline_timestamps=payload.get("_pipeline_timestamps", {}),
+            milestones=payload.get("milestones"),
+            expected_band=payload.get("expected_band"),
+            velocity_stats=payload.get("velocity_stats"),
+            flags=payload.get("flags"),
         )
 
         # 5. Render — serialize the whole context for the template's JSON.parse()
         chart_data_json = json.dumps(context, default=_json_default)
         html = render_to_string("templates/chart.html", {"chart_data_json": chart_data_json})
-        return [LaunchModalEffect(content=html).apply()]
+        return [
+            LaunchModalEffect(
+                content=html,
+                target=LaunchModalEffect.TargetType.RIGHT_CHART_PANE_LARGE,
+                title="Weight Trajectory",
+            ).apply()
+        ]
 
     def _render_error(self, errors: list[str]) -> list[Effect]:
         """Validation failure → an error modal (locked Option B), never [] or a banner."""
@@ -600,4 +1056,10 @@ class GenerateVitalsGraphs(ActionButton):
             f"<ul>{items}</ul>"
             "</div>"
         )
-        return [LaunchModalEffect(content=html).apply()]
+        return [
+            LaunchModalEffect(
+                content=html,
+                target=LaunchModalEffect.TargetType.RIGHT_CHART_PANE_LARGE,
+                title="Weight Trajectory",
+            ).apply()
+        ]
