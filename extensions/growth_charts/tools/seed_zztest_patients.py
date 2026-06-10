@@ -36,14 +36,13 @@ from __future__ import annotations
 
 import json
 import sys
-import urllib.parse
-import urllib.request
 from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
 
-EXTENSIONS_DIR = Path(__file__).resolve().parents[2]
-ENV_PATH = EXTENSIONS_DIR / ".env"
-OUT_PATH = EXTENSIONS_DIR / ".workspace_state" / "debug" / "seeded_patients.json"
+import _canvas_api
+
+OUT_PATH = _canvas_api.EXTENSIONS_DIR / ".workspace_state" / "debug" / "seeded_patients.json"
+
+ABORT_EPILOGUE = "No further writes will be attempted in this run."
 
 RUN_TAG = datetime.now(timezone.utc).strftime("R%Y%m%d%H%M")
 NAME_PREFIX = "ZZTEST-GLP1"
@@ -123,80 +122,35 @@ PATIENTS = {
 
 
 def load_env() -> dict:
-    if not ENV_PATH.exists():
-        abort(f"Missing credentials file: {ENV_PATH}")
-    env: dict = {}
-    for line in ENV_PATH.read_text().splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            key, _, value = line.partition("=")
-            env[key.strip()] = value.strip()
-    for key in ("CANVAS_HOST", "CANVAS_CLIENT_ID", "CANVAS_CLIENT_SECRET"):
-        if not env.get(key):
-            abort(f"{key} missing from extensions/.env")
-    return env
+    return _canvas_api.load_env(
+        required=("CANVAS_HOST", "CANVAS_CLIENT_ID", "CANVAS_CLIENT_SECRET")
+    )
 
 
 def abort(message: str) -> None:
-    print(f"\nABORT: {message}", file=sys.stderr)
-    print("No further writes will be attempted in this run.", file=sys.stderr)
-    raise SystemExit(1)
+    _canvas_api.abort(message, ABORT_EPILOGUE)
 
 
 class CanvasFHIR:
+    """Guarded FHIR write session. HTTP/auth plumbing lives in _canvas_api;
+    everything write-safety-related (the pre-write guard) lives HERE."""
+
     def __init__(self, env: dict):
-        host = env["CANVAS_HOST"].replace("https://", "").replace("http://", "").strip("/")
-        self.instance_base = f"https://{host}"
-        self.fhir_base = f"https://fumage-{host}"
-        self.token = self._fetch_token(env)
+        self.instance_base, self.fhir_base = _canvas_api.hosts(env)
+        self.token = _canvas_api.fetch_token(env, self.instance_base)
         # Pre-write guard state: ONLY ids returned by Patient creates this run.
         self.created_this_run: set[str] = set()
 
-    def _fetch_token(self, env: dict) -> str:
-        body = urllib.parse.urlencode({
-            "grant_type": "client_credentials",
-            "client_id": env["CANVAS_CLIENT_ID"],
-            "client_secret": env["CANVAS_CLIENT_SECRET"],
-        }).encode()
-        req = urllib.request.Request(
-            f"{self.instance_base}/auth/token/", data=body, method="POST",
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
-        try:
-            with urllib.request.urlopen(req) as resp:
-                token = json.loads(resp.read().decode()).get("access_token", "")
-        except Exception as exc:
-            abort(f"Token request failed: {type(exc).__name__}: {exc}")
-        if not token:
-            abort("Token response carried no access_token")
-        return token
-
     def request(self, method: str, path: str, payload: dict | None = None,
                 params: dict | None = None) -> tuple[int, dict, dict | None]:
-        url = f"{self.fhir_base}{path}"
-        if params:
-            url += "?" + urllib.parse.urlencode(params)
-        data = json.dumps(payload).encode() if payload is not None else None
-        req = urllib.request.Request(url, data=data, method=method, headers={
-            "Authorization": f"Bearer {self.token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        })
-        try:
-            with urllib.request.urlopen(req) as resp:
-                raw = resp.read().decode()
-                return resp.status, dict(resp.headers), json.loads(raw) if raw else None
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode()[:500]
-            abort(f"{method} {path} failed: HTTP {exc.code} — {detail}")
+        return _canvas_api.request(
+            f"{self.fhir_base}{path}", self.token, method, payload, params,
+            abort_epilogue=ABORT_EPILOGUE,
+        )
 
     @staticmethod
     def id_from_location(headers: dict, resource: str) -> str:
-        location = headers.get("Location") or headers.get("location") or ""
-        marker = f"/{resource}/"
-        if marker not in location:
-            abort(f"Create response Location missing {resource} id: {location!r}")
-        return location.split(marker, 1)[1].split("/")[0]
+        return _canvas_api.id_from_location(headers, resource)
 
     # ── Guarded operations ────────────────────────────────────────────
 

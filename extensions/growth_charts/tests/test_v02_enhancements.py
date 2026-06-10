@@ -17,9 +17,13 @@ from unittest.mock import MagicMock, patch
 
 try:
     from protocols.growth_charts import (
+        AXIS_PAD_FRACTION,
+        AXIS_PAD_MIN_LBS,
         DEFAULT_AGENT,
         EXPECTED_RESPONSE_BANDS,
         FLAG_DEFINITIONS,
+        GLP1_AGENT_KEYWORDS,
+        _collect_axis_weights,
         assemble_template_context,
         build_chart_data,
         build_expected_band,
@@ -197,7 +201,9 @@ def _mock_medication(*display_texts):
 
 class TestAgentDetection(V02TestCase):
     def _detect_with(self, MockMedication, meds):
-        MockMedication.objects.for_patient.return_value.active.return_value = meds
+        # v0.2.2: the queryset chain ends in .prefetch_related("codings").
+        chain = MockMedication.objects.for_patient.return_value.active.return_value
+        chain.prefetch_related.return_value = meds
         return detect_glp1_agent("patient-1")
 
     @patch("protocols.growth_charts.Medication")
@@ -249,7 +255,8 @@ class TestAgentDetection(V02TestCase):
     @patch("protocols.growth_charts.Medication")
     def test_missing_codings_attribute_degrades_to_default(self, MockMedication):
         med = MagicMock(spec=[])  # no .codings at all
-        MockMedication.objects.for_patient.return_value.active.return_value = [med]
+        chain = MockMedication.objects.for_patient.return_value.active.return_value
+        chain.prefetch_related.return_value = [med]
         self.assertEqual(detect_glp1_agent("patient-1"), DEFAULT_AGENT)
 
 
@@ -560,6 +567,52 @@ class TestTimezoneMixRegression(V02TestCase):
         ok, errors = validate_chart_payload(payload)
         self.assertTrue(ok, errors)
         self.assertEqual(len(payload["datapoints"]), 3)
+
+
+# ---------------------------------------------------------------------------
+# v0.2.2 hygiene patch (acceptance-review findings 3-8) — structural guards,
+# no behavior changes.
+# ---------------------------------------------------------------------------
+
+class TestV022Hygiene(V02TestCase):
+    def test_agent_keyword_keys_match_band_tables(self):
+        # Finding 7: the two dicts are coupled by string keys with a silent
+        # STEP-1 fallback on mismatch — pin the key sets to each other.
+        self.assertEqual(set(GLP1_AGENT_KEYWORDS), set(EXPECTED_RESPONSE_BANDS))
+
+    @patch("protocols.growth_charts.Medication")
+    def test_detection_prefetches_codings(self, MockMedication):
+        # Finding 3: codings must be prefetched (one query, not one per med).
+        chain = MockMedication.objects.for_patient.return_value.active.return_value
+        chain.prefetch_related.return_value = []
+        detect_glp1_agent("patient-1")
+        chain.prefetch_related.assert_called_once_with("codings")
+
+    def test_chart_config_ships_axis_pad_constants(self):
+        # Finding 6: JS reads the pad rule from chart_config; Python
+        # _axis_domain stays the source of truth.
+        context = assemble_template_context(
+            patient={"patient_id": "x"},
+            baseline={"value": 200.0, "value_lbs": 200.0},
+            datapoints=[],
+            pipeline_timestamps={},
+        )
+        cfg = context["chart_config"]
+        self.assertEqual(cfg["axis_pad_fraction"], AXIS_PAD_FRACTION)
+        self.assertEqual(cfg["axis_pad_min_lbs"], AXIS_PAD_MIN_LBS)
+        self.assertEqual(AXIS_PAD_FRACTION, 0.1)
+        self.assertEqual(AXIS_PAD_MIN_LBS, 2.0)
+
+    def test_collect_axis_weights_gathers_all_plotted_layers(self):
+        # Finding 8: datapoints + baseline + both band edges, one collector.
+        datapoints = [dp(0, 0.0, 220.0), dp(4, 2.0, 215.6)]
+        band = {"points": [{"lower_lbs": 219.0, "upper_lbs": 210.0}]}
+        weights = _collect_axis_weights(datapoints, 220.0, band)
+        self.assertEqual(weights, [220.0, 215.6, 220.0, 219.0, 210.0])
+
+    def test_collect_axis_weights_handles_empty_band(self):
+        weights = _collect_axis_weights([dp(0, 0.0, 198.0)], 198.0, {"points": []})
+        self.assertEqual(weights, [198.0, 198.0])
 
 
 if __name__ == "__main__":

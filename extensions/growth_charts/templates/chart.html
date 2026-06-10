@@ -324,7 +324,12 @@ const ChartScaffold = {
     }
     if (weights.length) {
       const lo = d3.min(weights), hi = d3.max(weights);
-      const pad = Math.max((hi - lo) * 0.1, 2);
+      // Pad rule comes from the server (chart_config) — Python _axis_domain
+      // is the source of truth for milestone suppression; never hardcode.
+      const cfg = CM.config || {};
+      const padFraction = cfg.axis_pad_fraction != null ? +cfg.axis_pad_fraction : 0.1;
+      const padMin = cfg.axis_pad_min_lbs != null ? +cfg.axis_pad_min_lbs : 2;
+      const pad = Math.max((hi - lo) * padFraction, padMin);
       CM.y.domain([lo - pad, hi + pad]).nice();
     } else {
       CM.y.domain([0, 1]);
@@ -388,13 +393,15 @@ const ExpectedBandLayer = {
     DiagnosticsPanel.recordTimestamp('ExpectedBandLayer.init', this._loadedAt);
   },
 
-  render(data) {
+  setData(data) {
     if (!this._isInitialized) this.init();
     this._data = data || null;
+  },
+
+  render(data) {
+    if (data !== undefined) this.setData(data);
     this._loadedAt = new Date().toISOString();
     console.log(`[ExpectedBandLayer] render() at ${this._loadedAt}`);
-
-    ChartScaffold.render(ChartScaffold._data);
 
     const g = CM.svg.select('.cm-layer-band');
     g.selectAll('*').remove();
@@ -458,16 +465,18 @@ const BaselineLayer = {
     DiagnosticsPanel.recordTimestamp('BaselineLayer.init', this._loadedAt);
   },
 
-  render(data) {
+  setData(data) {
     if (!this._isInitialized) this.init();
     this._data = data;
+  },
+
+  render(data) {
+    if (data !== undefined) this.setData(data);
     this._loadedAt = new Date().toISOString();
     console.log(`[BaselineLayer] render() at ${this._loadedAt}`);
 
-    // Ensure scaffold scales reflect the baseline value.
-    ChartScaffold.render(ChartScaffold._data);
-
-    const value = data ? +(data.value_lbs != null ? data.value_lbs : data.value) : null;
+    const d = this._data;
+    const value = d ? +(d.value_lbs != null ? d.value_lbs : d.value) : null;
     const g = CM.svg.select('.cm-layer-baseline');
     g.selectAll('*').remove();
     if (value != null && CM.y) {
@@ -513,13 +522,15 @@ const MilestoneLayer = {
     DiagnosticsPanel.recordTimestamp('MilestoneLayer.init', this._loadedAt);
   },
 
-  render(data) {
+  setData(data) {
     if (!this._isInitialized) this.init();
     this._data = Array.isArray(data) ? data : [];
+  },
+
+  render(data) {
+    if (data !== undefined) this.setData(data);
     this._loadedAt = new Date().toISOString();
     console.log(`[MilestoneLayer] render() at ${this._loadedAt} (${this._data.length} lines)`);
-
-    ChartScaffold.render(ChartScaffold._data);
 
     const g = CM.svg.select('.cm-layer-milestones');
     g.selectAll('*').remove();
@@ -571,14 +582,15 @@ const DataPointLayer = {
     DiagnosticsPanel.recordTimestamp('DataPointLayer.init', this._loadedAt);
   },
 
-  render(data) {
+  setData(data) {
     if (!this._isInitialized) this.init();
     this._data = Array.isArray(data) ? data : [];
+  },
+
+  render(data) {
+    if (data !== undefined) this.setData(data);
     this._loadedAt = new Date().toISOString();
     console.log(`[DataPointLayer] render() at ${this._loadedAt} (${this._data.length} points)`);
-
-    // Recompute scales now that data is known.
-    ChartScaffold.render(ChartScaffold._data);
 
     const pts = this._data
       .map(d => ({ ...d, _date: cmParseDate(d.date_obj), _w: +d.value_lbs }))
@@ -663,23 +675,27 @@ const AnnotationLayer = {
     DiagnosticsPanel.recordTimestamp('AnnotationLayer.init', this._loadedAt);
   },
 
-  render(data) {
+  setData(data) {
     if (!this._isInitialized) this.init();
     this._data = data;
+  },
+
+  render(data) {
+    if (data !== undefined) this.setData(data);
     this._loadedAt = new Date().toISOString();
     console.log(`[AnnotationLayer] render() at ${this._loadedAt}`);
 
     const g = CM.svg.select('.cm-layer-annotation');
     g.selectAll('*').remove();
     const points = DataPointLayer._data || [];
-    if (data && points.length) {
+    if (this._data && points.length) {
       const last = points
         .map(d => ({ ...d, _date: cmParseDate(d.date_obj), _w: +d.value_lbs }))
         .filter(d => d._date)
         .sort((a, b) => a._date - b._date)
         .slice(-1)[0];
       if (last) {
-        const pct = +data.tbwl_pct;
+        const pct = +this._data.tbwl_pct;
         // Clinical convention: positive TBWL = weight lost → show ↓ (good, green)
         //                      negative TBWL = weight gained → show ↑ (concern, red)
         const arrow = pct >= 0 ? '↓' : '↑';
@@ -771,22 +787,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
   StatsBar.render(chartData);
   ChartScaffold.init(chartData.chart_config);
-  ExpectedBandLayer.render(chartData.expected_band);
-  BaselineLayer.render(chartData.baseline_data);
-  MilestoneLayer.render(chartData.milestones);
-  DataPointLayer.render(chartData.datapoints);
-  AnnotationLayer.render(chartData.latest_annotation);
-  TooltipManager.init(chartData.datapoints);
 
-  // Re-render the visual layers now that all data is present so axes, band,
-  // and reference lines reflect the full dataset. Z-order is fixed by the
-  // scaffold's layer groups, so refresh order no longer affects stacking.
-  ChartScaffold.refresh();
-  ExpectedBandLayer.refresh();
-  BaselineLayer.refresh();
-  MilestoneLayer.refresh();
-  DataPointLayer.refresh();
-  AnnotationLayer.refresh();
+  // Hand every layer its data FIRST, then compute scales exactly once, then
+  // draw each layer once. (v0.2.2: layers no longer re-run the scaffold from
+  // their own render(), which previously rebuilt scales/axes/gridlines 4-5x
+  // per open.) Z-order is fixed by the scaffold's layer groups.
+  ExpectedBandLayer.setData(chartData.expected_band);
+  BaselineLayer.setData(chartData.baseline_data);
+  MilestoneLayer.setData(chartData.milestones);
+  DataPointLayer.setData(chartData.datapoints);
+  AnnotationLayer.setData(chartData.latest_annotation);
+
+  ChartScaffold.render();      // single scale/axes/gridline pass
+  ExpectedBandLayer.render();
+  BaselineLayer.render();
+  MilestoneLayer.render();
+  DataPointLayer.render();
+  AnnotationLayer.render();
+  TooltipManager.init(chartData.datapoints);
   DataPointLayer.animateIn();
 
   // Record Python-side pipeline timestamps.

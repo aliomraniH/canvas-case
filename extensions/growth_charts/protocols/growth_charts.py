@@ -61,6 +61,12 @@ _WEIGHT_TO_LBS = {
 
 MILESTONE_PCTS = (5.0, 10.0, 15.0)
 
+# Y-axis padding rule, shared with the template: Python `_axis_domain` is the
+# source of truth for milestone suppression; the JS scaffold reads these same
+# values from chart_config instead of hardcoding them (drift guard).
+AXIS_PAD_FRACTION = 0.1
+AXIS_PAD_MIN_LBS = 2.0
+
 DEFAULT_AGENT = "semaglutide_step1"
 
 # Agent detection (A3): lower-case substring match against active-medication
@@ -277,7 +283,11 @@ def detect_glp1_agent(patient_id: str) -> str:
     Medication.objects.for_patient(id).active(); med.codings.all() → .display.
     """
     try:
-        medications = Medication.objects.for_patient(patient_id).active()
+        medications = (
+            Medication.objects.for_patient(patient_id)
+            .active()
+            .prefetch_related("codings")  # one query for all codings, not one per med
+        )
         matched: set[str] = set()
         for med in medications:
             texts: list[str] = []
@@ -528,16 +538,33 @@ def dedupe_same_day(observations_with_dates: list) -> list:
 
 
 def _axis_domain(weights_lbs: list) -> tuple | None:
-    """The y-domain the chart will use, replicating templates/chart.html:
-    pad = max((hi - lo) * 0.1, 2). Conservative vs d3 `.nice()`, which may
-    round the rendered domain slightly outward — documented as intentional.
+    """The y-domain the chart will use: pad = max(range * AXIS_PAD_FRACTION,
+    AXIS_PAD_MIN_LBS). The template reads the same constants from chart_config,
+    so the rule is defined exactly once. Conservative vs d3 `.nice()`, which
+    may round the rendered domain slightly outward — documented as intentional.
     """
     weights = [float(w) for w in weights_lbs if w is not None]
     if not weights:
         return None
     lo, hi = min(weights), max(weights)
-    pad = max((hi - lo) * 0.1, 2.0)
+    pad = max((hi - lo) * AXIS_PAD_FRACTION, AXIS_PAD_MIN_LBS)
     return (lo - pad, hi + pad)
+
+
+def _collect_axis_weights(datapoints: list[dict], baseline_lbs: float, expected_band: dict) -> list:
+    """Every weight that drives the y-axis, in one place.
+
+    Any future plotted layer must register its weights here so the milestone
+    suppression domain (`_axis_domain`) and the rendered axis stay in lockstep.
+    Milestone lines themselves are deliberately excluded (they never widen
+    the axis).
+    """
+    weights = [dp.get("value_lbs") for dp in datapoints]
+    weights.append(baseline_lbs)
+    for band_point in expected_band.get("points") or []:
+        weights.append(band_point.get("lower_lbs"))
+        weights.append(band_point.get("upper_lbs"))
+    return weights
 
 
 def compute_milestone_lines(
@@ -766,10 +793,7 @@ def build_chart_data(observations_raw: list, notes_or_baseline=None, agent: str 
     expected_band = build_expected_band(
         baseline["value_lbs"], baseline["date"], last_week, agent
     )
-    axis_weights = [dp["value_lbs"] for dp in datapoints] + [baseline["value_lbs"]]
-    for band_point in expected_band["points"]:
-        axis_weights.append(band_point["lower_lbs"])
-        axis_weights.append(band_point["upper_lbs"])
+    axis_weights = _collect_axis_weights(datapoints, baseline["value_lbs"], expected_band)
     milestones = compute_milestone_lines(baseline["value_lbs"], axis_weights, latest_tbwl_pct)
     velocity = compute_velocity(datapoints)
     velocity_stats = build_velocity_stats(velocity)
@@ -961,6 +985,10 @@ def assemble_template_context(
             "show_benchmark_overlay": bool(expected_band.get("points")),
             "benchmark_source": band_label,
             "legend_text": f"Expected response ({band_label})",
+            # Axis padding rule — JS must use these, not hardcoded values, so
+            # the rendered domain can't drift from _axis_domain's suppression.
+            "axis_pad_fraction": AXIS_PAD_FRACTION,
+            "axis_pad_min_lbs": AXIS_PAD_MIN_LBS,
         },
         "_pipeline_timestamps": timestamps,
     }

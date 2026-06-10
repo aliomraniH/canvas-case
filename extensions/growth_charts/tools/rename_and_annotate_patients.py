@@ -21,15 +21,12 @@ Usage: python3 tools/rename_and_annotate_patients.py
 from __future__ import annotations
 
 import json
-import sys
-import urllib.parse
-import urllib.request
 from datetime import datetime, timezone
-from pathlib import Path
 
-EXTENSIONS_DIR = Path(__file__).resolve().parents[2]
-ENV_PATH = EXTENSIONS_DIR / ".env"
-MANIFEST_PATH = EXTENSIONS_DIR / ".workspace_state" / "debug" / "seeded_patients.json"
+import _canvas_api
+from _canvas_api import abort
+
+MANIFEST_PATH = _canvas_api.EXTENSIONS_DIR / ".workspace_state" / "debug" / "seeded_patients.json"
 
 # Looked up live (FHIR Practitioner/Location search, 2026-06-10):
 PROVIDER_KEY = "e766816672f34a5b866771c773e38f3c"          # Richard Wilson MD
@@ -59,54 +56,18 @@ RENAMES = {
 }
 
 
-def abort(message: str) -> None:
-    print(f"\nABORT: {message}", file=sys.stderr)
-    raise SystemExit(1)
-
-
-def load_env() -> dict:
-    env: dict = {}
-    for line in ENV_PATH.read_text().splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            key, _, value = line.partition("=")
-            env[key.strip()] = value.strip()
-    return env
-
-
 def request(url: str, token: str, method: str = "GET", payload: dict | None = None):
-    data = json.dumps(payload).encode() if payload is not None else None
-    req = urllib.request.Request(url, data=data, method=method, headers={
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    })
-    try:
-        with urllib.request.urlopen(req) as resp:
-            raw = resp.read().decode()
-            return resp.status, json.loads(raw) if raw else None
-    except urllib.error.HTTPError as exc:
-        abort(f"{method} {url} → HTTP {exc.code}: {exc.read().decode()[:400]}")
+    """Thin wrapper keeping this script's (status, body) call shape."""
+    status, _headers, body = _canvas_api.request(url, token, method, payload)
+    return status, body
 
 
 def main() -> None:
-    env = load_env()
-    host = env["CANVAS_HOST"].replace("https://", "").replace("http://", "").strip("/")
-    instance = f"https://{host}"
-    fhir = f"https://fumage-{host}"
-
-    body = urllib.parse.urlencode({
-        "grant_type": "client_credentials",
-        "client_id": env["CANVAS_CLIENT_ID"],
-        "client_secret": env["CANVAS_CLIENT_SECRET"],
-    }).encode()
-    with urllib.request.urlopen(urllib.request.Request(
-        f"{instance}/auth/token/", data=body, method="POST",
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-    )) as resp:
-        token = json.loads(resp.read().decode()).get("access_token", "")
-    if not token:
-        abort("no access_token")
+    env = _canvas_api.load_env(
+        required=("CANVAS_HOST", "CANVAS_CLIENT_ID", "CANVAS_CLIENT_SECRET")
+    )
+    instance, fhir = _canvas_api.hosts(env)
+    token = _canvas_api.fetch_token(env, instance)
 
     manifest = json.loads(MANIFEST_PATH.read_text())
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
