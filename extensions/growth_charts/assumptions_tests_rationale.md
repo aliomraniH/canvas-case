@@ -166,3 +166,16 @@ nothing pre-existing is ever written to. Two schema lessons cost one aborted
 run each: Patient create requires the us-core-birthsex extension, and weight
 observations must use unit `lb` (not `lbs`). One empty ZZTEST patient from
 the aborted runs remains on the sandbox (harmless, sorts to bottom).
+
+**Post-sign-off rename (2026-06-10):** the ZZTEST-GLP1 role names were hard
+to distinguish in patient lists, so `tools/rename_and_annotate_patients.py`
+renamed the nine patients to distinct realistic names and attached one
+"Office visit" note per chart whose title describes the scenario (name →
+scenario table in `demo_patients.md`). Patient ids, observations, and
+medication records were untouched — FHIR Patient PUT is permitted on this
+sandbox even though Observation PUT/DELETE is blocked. Its write guard:
+targets only ids from the seeding manifest, and the read-back must show
+either the ZZTEST-GLP1 family name or the already-applied target name. All
+nine patients re-verified post-rename: 63/63 Tier-2 assertions passed with
+chart values identical to the pre-rename runs (the added empty notes carry
+no observations, so chart data is unaffected).

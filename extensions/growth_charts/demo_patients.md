@@ -110,3 +110,30 @@ TOKEN=$(curl -s -X POST "https://pxbuilder-aomrani.canvasmedical.com/auth/token/
 - Plugin will show EffectErrorBanner for this patient
 - Use as unplanned "validation failure" test case if needed
 - Do NOT use as a primary demo patient
+
+---
+
+# v0.2 Demo Patients (seeded 2026-06-10, renamed for readability)
+
+Created by `tools/seed_zztest_patients.py` and renamed + annotated by
+`tools/rename_and_annotate_patients.py` (each chart carries an "Office visit"
+note whose title describes the scenario). Patient ids, observations, and
+medication records are unchanged from seeding. Machine-readable manifest:
+`extensions/.workspace_state/debug/seeded_patients.json`.
+
+| Key | Name | Scenario | GLP-1 med (band) | Expected chart behavior | Patient key |
+|-----|------|----------|------------------|------------------------|-------------|
+| P1 | Margaret Okafor | Strong responder — 12.1% TBWL at wk 28 | Wegovy (STEP-1) | 5%+10% milestones crossed, inside band, no flags | `1f07dc8c4785429f96551048067ee637` |
+| P2 | Derek Vance | Non-responder — 2.1% TBWL at wk 14 | none (STEP-1 fallback) | Above band top edge, 5% line uncrossed, no flags | `9b9dafa0549145c99c4ca9e1cc201de7` |
+| P3 | Sylvia Tran | Plateau — −7.5% then flat wks 16–28 | Zepbound (SURMOUNT-1) | Plateau badge, velocity ≈ −0.01%/wk | `07ca6a8fbf13444688103f1b71c33553` |
+| P4 | Hector Ramirez | Rapid loss — ~1.3%/wk over 10 wks | Saxenda (SCALE) | Rapid-loss badge, velocity −1.25%/wk | `fe2c4a8a584b4a6d8ef17739c595c3a2` |
+| P5 | Janelle Whitfield | Regain — −9% at wk 16 → −4% at wk 26 | none | Regain badge (NOT plateau), re-crosses 5% line | `19f978e7793f481196d802e21b8f468d` |
+| P6 | Owen Castellano | Sparse — two weights 90 days apart | none | Band renders, interpolated velocity, sparse-data note | `d1d7b983d36d4aaf8c27be8ad04ab458` |
+| P7 | Priya Raghunathan | Single measurement | none | One point + baseline only, velocity `—`, single-measurement note | `600b7294b204450c8694edecd2865683` |
+| P8 | Tobias Lindqvist | Mixed units — alternating kg/lb | none | All points normalized to lb, monotonic line | `2c3c49c6d9904b5f8891f5c9a809f042` |
+| P9 | Carmen Delgado | Same-day duplicate weights | none | 3 points from 4 obs, middle point averaged to 246.7 | `d6deed60a8324b49bc181a88ba79b470` |
+
+Chart URL pattern: `https://pxbuilder-aomrani.canvasmedical.com/patient/<patient key>`
+
+Post-rename verification (2026-06-10): all nine load correctly — 63/63 Tier-2
+assertions passed (`.workspace_state/debug/tools/tier2_v02_output/results.json`).

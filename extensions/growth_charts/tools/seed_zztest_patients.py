@@ -25,6 +25,11 @@ Credentials: read from extensions/.env ONLY. Never hardcoded, never printed.
 Usage:
   python3 tools/seed_zztest_patients.py --dry-run   # print plan, no writes
   python3 tools/seed_zztest_patients.py             # seed for real
+
+After seeding, run tools/rename_and_annotate_patients.py to give the new
+patients their readable demo names (Margaret Okafor, Derek Vance, ...) and a
+chart note describing each scenario — its guard accepts only ZZTEST-GLP1
+patients from the freshly written manifest, so the two-step flow stays safe.
 """
 
 from __future__ import annotations

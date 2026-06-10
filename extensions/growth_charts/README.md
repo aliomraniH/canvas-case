@@ -60,12 +60,16 @@ canvas list --host pxbuilder-aomrani | grep cardiometabolic
 
 ## Test data
 
-`tools/seed_zztest_patients.py` seeds the nine `ZZTEST-GLP1 *` patients
-(P1–P9) with weight series and GLP-1 medication records. Sandbox observation
-writes are permanent: the script only ever writes to patients it created in
-the same run (guarded), credentials come from `extensions/.env`, and re-runs
-create fresh run-tagged patients. Existing patients are read-only fixtures
-(see `demo_patients.md`).
+`tools/seed_zztest_patients.py` seeds the nine demo patients (P1–P9) with
+weight series and GLP-1 medication records, then
+`tools/rename_and_annotate_patients.py` gives them distinct realistic names
+(Margaret Okafor, Derek Vance, Sylvia Tran, …) and attaches a chart note
+describing each scenario — see the v0.2 table in `demo_patients.md` for the
+full name → scenario → patient-key mapping. Sandbox observation writes are
+permanent: the scripts only ever write to patients created/verified by their
+own run (guarded), credentials come from `extensions/.env`, and seeding
+re-runs create fresh run-tagged patients. Pre-existing patients are
+read-only fixtures.
 
 ### Important Note!
 
