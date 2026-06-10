@@ -18,8 +18,14 @@ SDK queries, which holds: milestones derive purely from the existing payload).
 **Suppression rule** (approved A2): a milestone renders only when its weight
 falls inside the y-domain the chart will use. The server mirrors the
 template's axis rule exactly — `pad = max((hi − lo) × 0.1, 2)` over all
-plotted weights (datapoints + baseline + expected-band edges). Milestones
-never widen the axis. This is deliberately conservative versus d3's
+plotted weights (datapoints + baseline + expected-band edges, gathered by the
+single `_collect_axis_weights` collector since v0.2.2). Milestones never
+widen the axis. **Drift guard (v0.2.2, review finding 6):** the pad constants
+(`AXIS_PAD_FRACTION` = 0.1, `AXIS_PAD_MIN_LBS` = 2.0) are defined once in
+Python and shipped to the template via `chart_config.axis_pad_fraction` /
+`axis_pad_min_lbs`; the JS scaffold reads them from there instead of
+hardcoding, so the rendered domain cannot drift from `_axis_domain`'s
+suppression decisions. This is deliberately conservative versus d3's
 `.nice()`, which may round the rendered domain slightly outward: a milestone
 sitting in the niced margin is suppressed even though it would technically
 fit. Accepted trade-off for a single server-side source of truth.

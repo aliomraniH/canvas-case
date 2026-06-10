@@ -80,3 +80,19 @@ page — it turns visual checks into exact assertions; (b) drive test scripts
 from the seeding manifest so live checks and seeded data can't drift; (c)
 scope console-error assertions to attributable sources before calling
 anything a failure.
+
+## v0.2.2 hygiene patch (2026-06-10) — tier usage
+
+- **Tier 0:** `canvas list` → `cardiometabolic_tracker@0.2.2  enabled`. Friction: none.
+- **Tier 1:** logs tail clean (0 error lines) using the corrected
+  `canvas logs --host` background-kill pattern from this doc; Margaret Okafor
+  render confirmed as part of the Tier-2 run (same dedup of login cycles as
+  v0.2.0 — a separate Tier-1 pass would only repeat the login).
+- **Tier 2:** 23/23 via `tools/tier2_v02_assertions.js P1 P3 P9`. The point
+  of this run was regression-pinning a refactor (single scaffold scale pass +
+  config-driven pad constants): every value byte-identical to v0.2.1 —
+  Sylvia Tran plateau badge / SURMOUNT-1 / −0.01%/wk, Carmen Delgado 3
+  circles / −0.60%/wk, Margaret dashed=4 / crossed 5+10 / STEP-1.
+  Reusable lesson: a selector-stable assertion script turns "the DOM must be
+  identical after the refactor" from a claim into a 3-minute check.
+- **Tiers 3–5:** not needed; no failures, no new tooling.
