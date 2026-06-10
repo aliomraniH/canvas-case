@@ -199,6 +199,11 @@ class CanvasFHIR:
         family = NAME_PREFIX
         payload = {
             "resourceType": "Patient",
+            # us-core-birthsex extension is REQUIRED on create (Canvas docs).
+            "extension": [{
+                "url": "http://hl7.org/fhir/us/core/StructureDefinition/us-core-birthsex",
+                "valueCode": "F" if gender == "female" else "M",
+            }],
             "name": [{"use": "official", "family": family, "given": [given, RUN_TAG]}],
             "gender": gender,
             "birthDate": "1980-01-01",
@@ -311,7 +316,8 @@ def schedule_dates(cfg: dict, run_day: date) -> list[date]:
 
 
 def normalized_weights(cfg: dict) -> list[tuple[float, str]]:
-    return [w if isinstance(w, tuple) else (w, "lbs") for w in cfg["weights"]]
+    # Canvas's weight vital validation accepts "lb" (not "lbs").
+    return [w if isinstance(w, tuple) else (w, "lb") for w in cfg["weights"]]
 
 
 def main() -> None:

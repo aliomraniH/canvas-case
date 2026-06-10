@@ -55,7 +55,9 @@ CLI session.
 
 **Check canvas logs (last 30 lines):**
 ```bash
-canvas logs pxbuilder-aomrani 2>&1 | tail -30
+# NB: `--host` flag is required (CLI 0.163.1); bare positional arg errors.
+# `canvas logs` streams — background it and kill after a few seconds:
+canvas logs --host pxbuilder-aomrani > /tmp/canvas_logs.txt 2>&1 & sleep 10; kill %1; tail -30 /tmp/canvas_logs.txt
 ```
 
 **Quick screenshot — no session folder created:**
