@@ -12,7 +12,7 @@ validation (Section 5 of the spec) is the second gate.
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 try:
@@ -516,6 +516,50 @@ class TestV02Payload(V02TestCase):
         )
         self.assertTrue(context["chart_config"]["show_benchmark_overlay"])
         self.assertEqual({f["key"] for f in context["flags"]}, {"plateau"})
+
+
+# ---------------------------------------------------------------------------
+# v0.2.1 — timezone-mix regression (aware FHIR dates + naive UI dates)
+# ---------------------------------------------------------------------------
+
+class TestTimezoneMixRegression(V02TestCase):
+    """Same-source seeded data is all tz-aware, but production charts can mix
+    FHIR-created (aware) and UI-created (naive) observations. Raw comparisons
+    between the two raise TypeError; every date sort/min must go through
+    _strip_tz. Found by the v0.2 acceptance code review."""
+
+    def _mixed_pair_same_day(self):
+        aware = raw_obs("tz-a", 250.0, "lbs", 0)
+        aware["datetime_of_service"] = aware["datetime_of_service"].replace(
+            tzinfo=timezone.utc
+        )
+        naive = raw_obs("tz-n", 248.0, "lbs", 0)
+        naive["datetime_of_service"] += timedelta(hours=2)
+        return [aware, naive]
+
+    def test_dedupe_same_day_mixed_tz_does_not_crash(self):
+        merged = dedupe_same_day(self._mixed_pair_same_day())
+        self.assertEqual(len(merged), 1)
+        self.assertAlmostEqual(merged[0]["value_original"], 249.0, places=3)
+
+    def test_dedupe_mixed_tz_keeps_earliest_timestamp(self):
+        merged = dedupe_same_day(self._mixed_pair_same_day())
+        # aware obs at 09:00 UTC precedes naive obs at 11:00 once tz-stripped
+        self.assertEqual(merged[0]["datetime_of_service"].hour, 9)
+
+    def test_full_pipeline_mixed_tz_across_days(self):
+        series = [
+            raw_obs("d0", 250.0, "lbs", 0),
+            raw_obs("d7", 247.0, "lbs", 7),
+            raw_obs("d14", 244.0, "lbs", 14),
+        ]
+        series[1]["datetime_of_service"] = series[1]["datetime_of_service"].replace(
+            tzinfo=timezone.utc
+        )
+        payload = build_chart_data(series, None)
+        ok, errors = validate_chart_payload(payload)
+        self.assertTrue(ok, errors)
+        self.assertEqual(len(payload["datapoints"]), 3)
 
 
 if __name__ == "__main__":

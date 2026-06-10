@@ -148,6 +148,15 @@ def _json_default(value):
     return str(value)
 
 
+def _strip_tz(dt):
+    """Strip timezone info so aware (FHIR-created) and naive (UI-created)
+    datetimes compare without TypeError. Use as the key for every
+    sort/min/max over observation dates — never compare them raw."""
+    if dt is not None and hasattr(dt, "tzinfo") and dt.tzinfo is not None:
+        return dt.replace(tzinfo=None)
+    return dt
+
+
 # ─────────────────────────────────────────────────────────────
 # SECTION 1: Data Loading Layer
 # ─────────────────────────────────────────────────────────────
@@ -376,12 +385,6 @@ def _baseline_record(observations: list) -> dict:
     if not observations:
         raise ValueError("Cannot compute baseline from zero observations")
 
-    def _strip_tz(dt):
-        """Strip timezone info for consistent sorting (mix of FHIR-aware and naive dates)."""
-        if dt is not None and hasattr(dt, "tzinfo") and dt.tzinfo is not None:
-            return dt.replace(tzinfo=None)
-        return dt
-
     def sort_key(obs):
         date = _strip_tz(_obs_date(obs))
         # Earliest date first; within a date, higher weight (in lbs) first.
@@ -416,8 +419,11 @@ def calculate_tbwl(baseline_lbs: float, current_lbs: float) -> float:
 
 
 def calculate_weeks_since_baseline(baseline_date: datetime, current_date: datetime) -> float:
-    """Float weeks between two dates. Negative if current precedes baseline."""
-    delta = current_date - baseline_date
+    """Float weeks between two dates. Negative if current precedes baseline.
+
+    Dates are tz-stripped first: subtracting an aware (FHIR) from a naive (UI)
+    datetime raises TypeError."""
+    delta = _strip_tz(current_date) - _strip_tz(baseline_date)
     return delta.total_seconds() / (7 * 24 * 60 * 60)
 
 
@@ -512,7 +518,7 @@ def dedupe_same_day(observations_with_dates: list) -> list:
                 first.get("canvas_note_id") if isinstance(first, dict) else _note_id_of(first)
             ),
             "datetime_of_service": min(
-                _obs_date(o) for o in group
+                (_obs_date(o) for o in group), key=_strip_tz
             ),
             "_loaded_at": first.get("_loaded_at") if isinstance(first, dict) else None,
             "deduped_from": [_obs_id(o) for o in group],
@@ -750,11 +756,7 @@ def build_chart_data(observations_raw: list, notes_or_baseline=None, agent: str 
         build_observation_processed(obs, baseline) for obs in observations_with_dates
     ]
     # Strip timezone for sorting — FHIR dates are tz-aware, UI dates may be naive.
-    datapoints.sort(key=lambda dp: (
-        dp["date_obj"].replace(tzinfo=None)
-        if dp["date_obj"] is not None and getattr(dp["date_obj"], "tzinfo", None) is not None
-        else dp["date_obj"]
-    ))
+    datapoints.sort(key=lambda dp: _strip_tz(dp["date_obj"]))
 
     latest_tbwl_pct = datapoints[-1]["tbwl_pct"] if datapoints else 0.0
 
@@ -845,7 +847,8 @@ def validate_chart_payload(payload: dict) -> tuple[bool, list[str]]:
         errors.append("Zero or negative weight value present")
 
     # 6. datapoints sorted ascending by date
-    dates = [dp.get("date_obj") for dp in datapoints if dp.get("date_obj") is not None]
+    dates = [_strip_tz(dp.get("date_obj")) for dp in datapoints
+             if dp.get("date_obj") is not None]
     if dates != sorted(dates):
         errors.append("Datapoints not sorted ascending by date / wrong order")
 

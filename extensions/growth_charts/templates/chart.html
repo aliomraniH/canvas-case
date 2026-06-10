@@ -1,8 +1,13 @@
 <!DOCTYPE html>
 <style>
   .cm-container {
-    width: 760px;
+    /* Fluid below 760px: the right-chart-pane viewport can be narrower than
+       the design width, and a fixed width clipped the right-aligned badge
+       column off-screen (v0.2.1 fix). */
+    width: auto;
+    max-width: 760px;
     margin: 20px auto;
+    padding: 0 12px;
     font-family: Lato, 'Helvetica Neue', Arial, Helvetica, sans-serif;
     color: #1f2933;
   }
@@ -25,6 +30,7 @@
   /* StatsBar — velocity figure + flag badges (v0.2 E3/E4) */
   .cm-statsbar {
     display: flex;
+    flex-wrap: wrap;          /* badges drop below the figure when narrow */
     justify-content: space-between;
     align-items: flex-start;
     gap: 16px;
