@@ -16,7 +16,7 @@
 ### Canvas Instance
 - **URL:** `https://pxbuilder-aomrani.canvasmedical.com`
 - **FHIR base:** `https://fumage-pxbuilder-aomrani.canvasmedical.com`
-- **Credentials:** rwilson / canvas123 (clinician account)
+- **Credentials:** clinician account — see `extensions/.env` (gitignored)
 - **Access method:** Chrome connector (MCP tool `mcp__Claude_in_Chrome__*`) for browser
   interaction; bash + `canvas` CLI for deploy/logs; FHIR API via `curl` with OAuth2
   client credentials flow for test data creation and verification.
@@ -32,7 +32,7 @@
   the UUID `Note.id`. Both required fixes in the plugin.
 
 ### OAuth Credentials Used for FHIR API
-- **Client ID:** `1FAe5bKiy1LcwXrQ7OlI3iSXEIDStznv9QHirewL`
+- **Client ID:** `CANVAS_CLIENT_ID` from `extensions/.env` (also in `~/.canvas/credentials.ini`)
 - **Token endpoint:** `POST /auth/token/` with `grant_type=client_credentials`
 - **Token TTL:** 10 hours
 

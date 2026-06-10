@@ -89,10 +89,11 @@
 ## FHIR API Reference (used to create this data)
 
 ```bash
-# Auth token
+# Auth token — client id/secret come from extensions/.env (gitignored)
+set -a; source extensions/.env; set +a
 TOKEN=$(curl -s -X POST "https://pxbuilder-aomrani.canvasmedical.com/auth/token/" \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "grant_type=client_credentials&client_id=1FAe5bKiy1LcwXrQ7OlI3iSXEIDStznv9QHirewL&client_secret=..." \
+  -d "grant_type=client_credentials&client_id=$CANVAS_CLIENT_ID&client_secret=$CANVAS_CLIENT_SECRET" \
   | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))")
 
 # Create one weight observation (requires 2 calls: panel + weight)

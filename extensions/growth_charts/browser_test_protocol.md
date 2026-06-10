@@ -1,7 +1,7 @@
 # Browser Verification Protocol
 # cardiometabolic_tracker — Canvas Medical Plugin
 # Run after EVERY /cpa:deploy via Chrome connector
-# Instance: pxbuilder-aomrani.canvasmedical.com (rwilson / canvas123)
+# Instance: pxbuilder-aomrani.canvasmedical.com (credentials in extensions/.env)
 
 ---
 
@@ -12,7 +12,7 @@ Trigger: companion hears "deployed" → runs this protocol automatically without
 
 Chrome connector status at session start: ✅ VERIFIED LIVE
 - URL: https://pxbuilder-aomrani.canvasmedical.com/schedule/day#location=UHJhY3RpY2VMb2NhdGlvbjo%3D
-- Logged in as: rwilson
+- Logged in as: the clinician account from extensions/.env (CANVAS_USERNAME)
 - Clinicians on schedule: Richard Wilson MD, Amanda Miller DO, Christopher Taylor NP
 
 ---

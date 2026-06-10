@@ -1,0 +1,10 @@
+# Credentials — never commit
+.env
+.env.*
+!.env.example
+
+# Debug session artifacts (large PNGs, node_modules)
+.workspace_state/debug/*/screenshots/
+.workspace_state/debug/*/node_modules/
+.workspace_state/debug/*/package-lock.json
+.workspace_state/debug/*/package.json
