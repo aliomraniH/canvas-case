@@ -1,6 +1,13 @@
 # GLP-1 Weight Management Science Reference
 # For cardiometabolic_tracker Canvas Plugin
 # Created: companion session — do not edit manually; regenerate from session
+# Corrected 2026-06-10 (manual un-freeze → fix → re-freeze; no generator script
+#   exists for this curated file): the SCALE 56-week figure 8.4 was mislabeled
+#   under "Mean % TBWL" — 8.4 is the kilogram change (−8.4 kg); the percent
+#   change is −8.0%. Fixed the label, added the kg column, and added the
+#   SD + CDF distribution rows the plugin's SCALE band actually ships. Scoped
+#   to the SCALE/Liraglutide block only (Gate 5). See commit; primary source
+#   Pi-Sunyer 2015 NEJM 373:11–22.
 
 ---
 
@@ -75,12 +82,39 @@ in Weight Management." NEJM 2015;373:11-22 (SCALE trial).
 **Trial design:** 3731 adults without T2DM, BMI ≥30, 56-week duration.
 
 **Primary endpoint TBWL (liraglutide arm):**
-| Week | Mean % TBWL |
-|------|------------|
-| 12   | 4.2        |
-| 24   | 6.4        |
-| 40   | 7.8        |
-| 56   | 8.4        |
+
+> Corrected 2026-06-10 — the 56-week cell previously read `8.4` under
+> "Mean % TBWL"; that 8.4 is the **kilogram** change (−8.4 kg), not the
+> percent change (−8.0%). The percent column below now carries the published
+> percent figure; the kilogram value is preserved in its own column. All rows
+> cite Pi-Sunyer X et al., NEJM 2015;373:11–22 (56-wk, LOCF, completers).
+
+| Week | Mean % TBWL | Mean change (kg) |
+|------|------------|------------------|
+| 12   | 4.2        | —                |
+| 24   | 6.4        | —                |
+| 40   | 7.8        | —                |
+| 56   | 8.0        | 8.4              |
+
+(Per-week kilogram figures other than the 56-week endpoint were not extracted
+to this reference; `—` marks "not transcribed here", not "not published".)
+
+**Distribution of the 56-week percent change** (the rows the plugin's SCALE
+expected-response band ships — all Pi-Sunyer 2015, NEJM 2015;373:11–22):
+
+| Statistic | Value |
+|-----------|-------|
+| Mean % body-weight change | −8.0 |
+| SD (percentage points)    | 6.7  |
+
+**Categorical responder rates (CDF anchors)** — Pi-Sunyer 2015,
+NEJM 2015;373:11–22:
+
+| Threshold | Patients reaching it |
+|-----------|----------------------|
+| ≥5% loss  | 63.2%                |
+| >10% loss | 33.1%                |
+| >15% loss | 14.4%                |
 
 ---
 

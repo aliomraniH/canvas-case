@@ -13,7 +13,10 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+REFERENCE_PATH = Path(__file__).resolve().parent.parent / "glp1_science_reference.md"
 
 try:
     from protocols.growth_charts import (
@@ -734,6 +737,55 @@ class TestScaleBandReplacement(V02TestCase):
         self.assertIn("Pi-Sunyer", SCALE_BOUNDS_DISCLOSURE)
         for stale in ("0.5", "1.5", "illustrative"):
             self.assertNotIn(stale, SCALE_BOUNDS_DISCLOSURE)
+
+
+# ---------------------------------------------------------------------------
+# Verifies: reference concordance @ ab105be
+#
+# Tripwire defending the CORRECTED Gate-1 reference. (The plan called this an
+# "inversion" of a prior TestGate1ReferenceDisagreement tripwire, but that test
+# never existed in the repo — the v0.2.4 kg-vs-% issue was recorded only as a
+# commit note + rationale + code comment, never a test. Contradiction reported;
+# this is created fresh rather than inverted.) The authority is the paper, not
+# the code and not the reference — both are caches of Pi-Sunyer 2015. This test
+# pins that the reference reproduces the paper AND that the code's shipped SCALE
+# numbers match the reference, so it trips if either regresses.
+# ---------------------------------------------------------------------------
+
+class TestGate1ReferenceConcordance(V02TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.ref = REFERENCE_PATH.read_text(encoding="utf-8")
+        cls.meta = EXPECTED_RESPONSE_BANDS["liraglutide_scale"]["metadata"]
+
+    def test_reference_carries_corrected_percent_and_kg(self):
+        # 56-week row: −8.0 under % TBWL, 8.4 preserved under a kg label.
+        self.assertRegex(self.ref, r"\|\s*56\s*\|\s*8\.0\s*\|\s*8\.4\s*\|")
+        self.assertIn("Mean change (kg)", self.ref)
+        # The old mislabel (8.4 as the 56-wk % value) must be gone.
+        self.assertNotRegex(self.ref, r"\|\s*56\s*\|\s*8\.4\s*\|\s*$")
+
+    def test_code_percent_matches_reference_percent(self):
+        # center is signed in code (−8.0); the reference prints the magnitude.
+        self.assertEqual(self.meta["center"], -8.0)
+        self.assertIn("−8.0", self.ref)  # U+2212 minus, as written in the ref
+        self.assertIn("| Mean % body-weight change | −8.0 |", self.ref)
+
+    def test_sd_present_and_concordant(self):
+        self.assertEqual(self.meta["sd"], 6.7)
+        self.assertIn("| SD (percentage points)    | 6.7  |", self.ref)
+
+    def test_cdf_anchors_present_and_concordant(self):
+        anchors = {a["threshold_pct"]: a["responders_pct"] for a in self.meta["scale_cdf_anchors"]}
+        self.assertEqual(anchors, {5: 63.2, 10: 33.1, 15: 14.4})
+        # Each shipped responder rate must appear in the reference's CDF table.
+        for pct in (63.2, 33.1, 14.4):
+            self.assertIn(f"{pct}%", self.ref)
+
+    def test_scale_rows_cite_primary_source(self):
+        # The corrected SCALE rows must be auditable to the paper.
+        self.assertIn("Pi-Sunyer", self.ref)
+        self.assertIn("2015;373:11", self.ref)
 
 
 if __name__ == "__main__":

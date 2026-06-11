@@ -300,6 +300,17 @@ A guard-protected abort left one patient with zero observations on the
 sandbox. Harmless and intentionally left in place — deletion is blocked in
 this sandbox (FHIR writes are permanent).
 
+### A Gate-1 reference source can itself be wrong
+
+`glp1_science_reference.md` is the designated Gate-1 source of truth, but its
+SCALE 56-week figure was mislabeled (the −8.4 kg value sat under a "Mean %
+TBWL" header; the percent is −8.0%). "Code matches reference" was therefore
+circular — both were caches of the same error until the band was independently
+derived from the paper in v0.2.4. Rule: figures in a reference must trace to a
+**primary citation**, and code-vs-reference concordance is only meaningful when
+both trace to the paper. `TestGate1ReferenceConcordance` now pins code ==
+reference == Pi-Sunyer 2015 for the SCALE rows.
+
 > These findings are also encoded in the `build-discipline` skill's Gate 1
 > known-facts list (fast path). This section remains the canonical in-repo
 > record; new facts get appended to BOTH.

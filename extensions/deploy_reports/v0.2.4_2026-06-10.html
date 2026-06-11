@@ -102,9 +102,13 @@ in the SCALE band path only.</div>
 <ul>
   <li><strong>CDF responder-rate markers:</strong> render the 5/10/15% anchors (63.2% / 33.1% / 14.4% of
       patients) already shipped in SCALE metadata — rendering-only change, data pinned in v0.2.4.</li>
-  <li><strong>Reference-file regeneration:</strong> <code>glp1_science_reference.md</code> still carries
-      the SCALE kg-vs-% cell (8.4) and the SURMOUNT-1 estimand discrepancy from the v0.2.3 report; the
-      file is do-not-edit-manually, so it needs a regeneration pass.</li>
+  <li><strong>Reference-file regeneration:</strong> <s>the SCALE kg-vs-% cell (8.4) is mislabeled</s>
+      <strong>RESOLVED 2026-06-10 (commit ab105be follow-up)</strong> — <code>glp1_science_reference.md</code>'s
+      SCALE 56-week cell corrected to −8.0% with a kg column preserving 8.4, plus the SD and CDF rows the
+      band ships, each cited to Pi-Sunyer 2015; <code>TestGate1ReferenceConcordance</code> now guards the
+      corrected state. No version shipped (the band already carried the right numbers since v0.2.4).
+      Still open from this item: the SURMOUNT-1 estimand discrepancy and a file-wide citation retrofit
+      (only SCALE rows are inline-cited).</li>
   <li><strong>Residual skew caveat:</strong> the symmetric &plusmn;1&nbsp;SD band approximates a
       right-skewed distribution; replace with published quantiles/percentiles for SCALE if a source is
       found.</li>

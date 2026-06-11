@@ -101,6 +101,32 @@ the kg-vs-% transcription error already flagged in the v0.2.3 passage above.
 v0.2.4 ships the published −8.0%; the reference file carries a
 do-not-edit-manually header, so regenerating it remains a v-next item.
 
+**SCALE reference correction (2026-06-10, post-v0.2.4, no version bump):** the
+v-next item above is now RESOLVED. Adjudication: 8.4 is the published
+**kilogram** change (−8.4 kg), not a percent — the reference had put the kg
+value under a "Mean % TBWL" header (the 12/24/40-wk cells, 4.2/6.4/7.8,
+already matched the published *percent* trajectory, so only the 56-wk cell was
+mislabeled). The authority is the paper (Pi-Sunyer 2015), not the code or the
+reference — both are caches of it, so "code matches reference" would be
+circular. We corrected the **reference**, not the code: the band already
+shipped the correct −8.0% / SD 6.7 / CDF anchors in v0.2.4, so no plugin code
+or behavior changed (verified: empty `git diff` over the plugin package, no
+version bump, no deploy). The do-not-edit file has no generator script
+("regenerate from session" = an LLM session), so the fix was an explicit
+logged un-freeze → correct → re-freeze recorded in the file header: 56-wk %
+cell → 8.0, a `Mean change (kg)` column preserves the 8.4 datum, and the SD +
+CDF rows the band actually uses were added, each inline-cited to NEJM
+2015;373:11–22. **Tripwire:** `TestGate1ReferenceConcordance` now pins the
+corrected state (code's SCALE numbers == the reference's == the paper's) — it
+trips if the reference regresses or the code's SCALE figures drift from it.
+(The plan framed this as "inverting" a prior disagreement-tripwire, but no
+such test existed — the v0.2.4 kg-vs-% issue lived only in a commit note, this
+rationale, and a code comment; reported and created fresh instead.) The code's
+kg-vs-% explanatory comment in `EXPECTED_RESPONSE_BANDS` is kept — it still
+documents why 8.4 ≠ −8.0. Remaining v-next: file-wide citation retrofit (only
+the SCALE rows are inline-cited so far) and the SURMOUNT-1 estimand
+discrepancy noted above.
+
 **Weight-space inversion:** `upper_pct` (more loss) maps to the LOWER weight
 on screen. The band's visual top edge is `lower_pct`'s weight. The P2
 "patient above band" assertion is therefore `last_weight > lower_lbs(last)`.
