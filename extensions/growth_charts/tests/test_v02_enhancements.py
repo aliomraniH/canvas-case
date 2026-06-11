@@ -173,11 +173,13 @@ class TestExpectedBand(V02TestCase):
         self.assertAlmostEqual(by_week[24.0]["lower_pct"], 8.0)
         self.assertAlmostEqual(by_week[24.0]["upper_pct"], 22.0)
 
+        # Re-synced for v0.2.4: SCALE interpolates linearly from week 0 to the
+        # published ±1 SD endpoint (1.3-14.7 at wk 56) → wk 24 = 24/56 of each.
         lira = build_expected_band(200.0, START, 24.0, "liraglutide_scale")
         self.assertEqual(lira["label"], "SCALE")
         by_week = {p["week"]: p for p in lira["points"]}
-        self.assertAlmostEqual(by_week[24.0]["lower_pct"], 3.2)
-        self.assertAlmostEqual(by_week[24.0]["upper_pct"], 9.6)
+        self.assertAlmostEqual(by_week[24.0]["lower_pct"], 24.0 / 56.0 * 1.3)
+        self.assertAlmostEqual(by_week[24.0]["upper_pct"], 24.0 / 56.0 * 14.7)
 
     def test_band_dates_anchor_to_baseline(self):
         band = build_expected_band(200.0, START, 12.0, "semaglutide_step1")
@@ -653,7 +655,8 @@ class TestBandMetadata(V02TestCase):
     def test_disclosure_present_only_when_estimated(self):
         scale = build_expected_band(200.0, START, 24.0, "liraglutide_scale")
         self.assertEqual(scale["band_metadata"]["disclosure"], SCALE_BOUNDS_DISCLOSURE)
-        self.assertIn("illustrative, not statistical", SCALE_BOUNDS_DISCLOSURE)
+        # Re-synced for v0.2.4: the disclosure is now about imputation/skew.
+        self.assertIn("approximation", SCALE_BOUNDS_DISCLOSURE)
         for agent in ("semaglutide_step1", "tirzepatide_surmount1"):
             meta = build_expected_band(200.0, START, 24.0, agent)["band_metadata"]
             self.assertNotIn("disclosure", meta)
@@ -670,9 +673,67 @@ class TestBandMetadata(V02TestCase):
             )
             return context["chart_config"]["legend_text"]
 
-        self.assertEqual(legend_for("liraglutide_scale"), "Expected response (SCALE, estimated)")
+        # Re-synced for v0.2.4: the qualifier is now the band basis, not
+        # "estimated" — SCALE reads "±1 SD"; trial-percentile bands unmarked.
+        self.assertEqual(legend_for("liraglutide_scale"), "Expected response (SCALE, ±1 SD)")
         self.assertEqual(legend_for("semaglutide_step1"), "Expected response (STEP-1)")
         self.assertEqual(legend_for("tirzepatide_surmount1"), "Expected response (SURMOUNT-1)")
+
+
+# ---------------------------------------------------------------------------
+# Verifies: v0.2.4 @ 59db2da (SCALE band replacement: published mean ±1 SD
+# replaces the synthesized 0.5x/1.5x bounds; CDF anchors data-only)
+# ---------------------------------------------------------------------------
+
+class TestScaleBandReplacement(V02TestCase):
+    def _scale_meta(self):
+        return build_expected_band(200.0, START, 56.0, "liraglutide_scale")["band_metadata"]
+
+    def test_published_center_and_bounds(self):
+        meta = self._scale_meta()
+        self.assertEqual(meta["center"], -8.0)
+        self.assertEqual(meta["sd"], 6.7)
+        self.assertEqual(meta["lower_bound"], -1.3)
+        self.assertEqual(meta["upper_bound"], -14.7)
+
+    def test_band_endpoint_matches_published_bounds(self):
+        # The drawn corridor at week 56 is the ±1 SD pair, not a multiplier
+        # of the mean (8.4 x 0.5/1.5 would be 4.2/12.6 — the old synthesis).
+        band = build_expected_band(200.0, START, 56.0, "liraglutide_scale")
+        last = band["points"][-1]
+        self.assertAlmostEqual(last["week"], 56.0)
+        self.assertAlmostEqual(last["lower_pct"], 1.3)
+        self.assertAlmostEqual(last["upper_pct"], 14.7)
+
+    def test_cdf_anchors_present(self):
+        self.assertEqual(self._scale_meta()["scale_cdf_anchors"], [
+            {"threshold_pct": 5, "responders_pct": 63.2},
+            {"threshold_pct": 10, "responders_pct": 33.1},
+            {"threshold_pct": 15, "responders_pct": 14.4},
+        ])
+
+    def test_step1_and_surmount1_untouched(self):
+        # Regression guard: this patch must not move the trial-derived bands.
+        self.assertEqual(EXPECTED_RESPONSE_BANDS["semaglutide_step1"]["points"], (
+            (0, 0.0, 0.0), (4, 0.5, 4.5), (8, 1.0, 7.0), (12, 2.0, 11.0),
+            (16, 3.0, 13.5), (20, 4.0, 15.0), (24, 5.0, 16.5), (36, 6.0, 19.0),
+            (52, 7.0, 21.0), (68, 7.5, 22.0),
+        ))
+        self.assertEqual(EXPECTED_RESPONSE_BANDS["tirzepatide_surmount1"]["points"], (
+            (0, 0.0, 0.0), (4, 0.8, 5.5), (8, 2.0, 10.0), (12, 3.5, 14.5),
+            (16, 5.0, 18.0), (24, 8.0, 22.0), (36, 10.0, 26.0),
+            (52, 12.0, 28.5), (72, 13.0, 31.0),
+        ))
+        for agent in ("semaglutide_step1", "tirzepatide_surmount1"):
+            meta = EXPECTED_RESPONSE_BANDS[agent]["metadata"]
+            self.assertFalse(meta["estimated_bounds"])
+            self.assertNotIn("legend_qualifier", meta)
+
+    def test_disclosure_copy_replaced(self):
+        self.assertIn("±1 SD", SCALE_BOUNDS_DISCLOSURE)
+        self.assertIn("Pi-Sunyer", SCALE_BOUNDS_DISCLOSURE)
+        for stale in ("0.5", "1.5", "illustrative"):
+            self.assertNotIn(stale, SCALE_BOUNDS_DISCLOSURE)
 
 
 if __name__ == "__main__":

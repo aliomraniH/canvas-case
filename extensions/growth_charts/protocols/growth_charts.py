@@ -82,15 +82,20 @@ GLP1_AGENT_KEYWORDS = {
 # Sources (see glp1_science_reference.md / assumptions_tests_rationale.md):
 #   STEP-1     Wilding et al., NEJM 2021;384:989-1002
 #   SURMOUNT-1 Jastreboff et al., NEJM 2022;387:205-216 (15 mg arm)
-#   SCALE      Pi-Sunyer et al., NEJM 2015;373:11-22 — means only published;
-#              bounds synthesized at mean x0.5 / x1.5 (the relative spread the
-#              STEP-1 and SURMOUNT-1 percentile columns show). Approximation.
-# SCALE published means only — its band bounds are synthesized, and the UI
-# must disclose that (v0.2.3). Shown only when estimated_bounds is True.
+#   SCALE      Pi-Sunyer et al., NEJM 2015;373:11-22 — band is the published
+#              mean ±1 SD at 56 wk (v0.2.4; synthesis removed). NB the
+#              reference file's 56-wk "8.4" is the published kg figure
+#              (-8.0% = 8.4 kg), a known transcription error — see
+#              assumptions_tests_rationale.md.
+# SCALE band basis (v0.2.4): published mean ±1 SD, 56-week LOCF (Pi-Sunyer
+# 2015). estimated_bounds now flags the IMPUTATION/NORMALITY basis (a Gaussian
+# ±1 SD approximation of a right-skewed distribution), not synthesis. Shown
+# only when estimated_bounds is True.
 SCALE_BOUNDS_DISCLOSURE = (
-    "Band bounds are estimated as 0.5×–1.5× of the published trial mean; "
-    "SCALE did not report percentile distributions. Interpret the band width "
-    "as illustrative, not statistical."
+    "Band is the published mean ±1 SD (−8.0 ± 6.7%) at 56 weeks, LOCF, trial "
+    "completers (Pi-Sunyer 2015). Weight-loss response is right-skewed, so "
+    "the symmetric band is an approximation; ≥5% / >10% / >15% of patients "
+    "reached those losses in 63% / 33% / 14% of cases respectively."
 )
 
 # Citation volume/page strings verified against glp1_science_reference.md
@@ -139,12 +144,30 @@ EXPECTED_RESPONSE_BANDS = {
                 "of Liraglutide in Weight Management. N Engl J Med 2015;373:11-22."
             ),
             "summary": "Mean −8.0% (8.4 kg) at 56 weeks vs −2.6% placebo (n=3,731).",
+            # v0.2.4: True now flags the imputation/normality basis (Gaussian
+            # ±1 SD over a right-skewed outcome), NOT synthesized bounds.
             "estimated_bounds": True,
+            "legend_qualifier": "±1 SD",
             "disclosure": SCALE_BOUNDS_DISCLOSURE,
+            # Published 56-week LOCF distribution (signed: negative = loss).
+            "center": -8.0,
+            "sd": 6.7,
+            "lower_bound": -1.3,   # mean + 1 SD, toward zero
+            "upper_bound": -14.7,  # mean - 1 SD, toward greater loss
+            # Published categorical responder rates — DATA ONLY in v0.2.4
+            # (no marker rendering; Gate 5 deferred that to v-next).
+            "scale_cdf_anchors": [
+                {"threshold_pct": 5, "responders_pct": 63.2},
+                {"threshold_pct": 10, "responders_pct": 33.1},
+                {"threshold_pct": 15, "responders_pct": 14.4},
+            ],
         },
+        # v0.2.4: drawn from the published mean ±1 SD at the 56-week endpoint
+        # (1.3-14.7 %TBWL in the internal positive-loss convention), linearly
+        # interpolated from baseline — no per-week SDs were published. The
+        # 0.5x/1.5x synthesized rows are gone.
         "points": (
-            (0, 0.0, 0.0), (12, 2.1, 6.3), (24, 3.2, 9.6),
-            (40, 3.9, 11.7), (56, 4.2, 12.6),
+            (0, 0.0, 0.0), (56, 1.3, 14.7),
         ),
     },
 }
@@ -1014,8 +1037,10 @@ def assemble_template_context(
 
     band_label = expected_band.get("label") or EXPECTED_RESPONSE_BANDS[DEFAULT_AGENT]["label"]
     band_metadata = expected_band.get("band_metadata") or {}
-    # Estimated (synthesized) bounds are disclosed in the legend itself (v0.2.3).
-    legend_label = f"{band_label}, estimated" if band_metadata.get("estimated_bounds") else band_label
+    # Band-basis qualifier shown in the legend itself (v0.2.4: SCALE reads
+    # "±1 SD"; trial-percentile bands carry no qualifier).
+    qualifier = band_metadata.get("legend_qualifier")
+    legend_label = f"{band_label}, {qualifier}" if qualifier else band_label
     return {
         "patient": {**patient, "_component": "patient_info", "_loaded_at": now},
         "baseline_data": {**baseline, "_component": "baseline_layer", "_loaded_at": now},
