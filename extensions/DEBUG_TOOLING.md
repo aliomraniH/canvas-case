@@ -221,6 +221,28 @@ const scriptTags = [...(iframeDoc?.querySelectorAll('script') || [])];
 return scriptTags.map(s => s.textContent.substring(0, 300));
 ```
 
+### Print/export inside the plugin iframe (v0.3.0, verified live 2026-06-11)
+
+- `window.print()` IS available inside the `about:srcdoc` iframe
+  (`typeof === 'function'`) and prints only the iframe document — the
+  browser print pipeline is viable for plugin views.
+- Playwright's `page.emulateMedia({ media: 'print' })` applies to iframes,
+  so `@media print` state can be asserted headlessly without a dialog.
+- The SDK's only native PDF capability is `GenerateFullChartPDFEffect`:
+  whole native chart, async (task list, ~10 min), creates EHR artifacts —
+  not usable for exporting plugin-rendered views.
+- `Patient.first_name` / `Patient.last_name` are real SDK fields
+  (`canvas_sdk/v1/data/patient.py`) for export headers.
+- Console-triage reality: the host login page's S3 background image
+  (`canvas-medical.s3...Background@2x.jpg`) intermittently fails
+  (`ERR_CONNECTION_RESET` / `NotSameOrigin`) and pollutes naive console-error
+  assertions. Attribute by URL (`page.on('requestfailed')`) and assert only on
+  `about:srcdoc`/jsdelivr-attributable entries.
+- Canvas login page submit selector: `button:has-text("Login")` —
+  `input[type=submit]` does not exist.
+- The zero-observation validation-blocked patient is Jane Will
+  (`53e062d0dc5249eb9309cb900754a050`), not "Carol Singh" (RUNBOOK §6 stale).
+
 ### Canvas API URL structure
 
 Canvas REST API uses `/api/<Resource>/` (not `/api/r4/` FHIR format):
