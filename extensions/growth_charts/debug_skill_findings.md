@@ -118,3 +118,16 @@ existing mode (in-scope for the playbook file), not a new capability.
   cites STEP 1 (P2). All previously pinned values unchanged.
 - **Tiers 1/3–5:** Tier 1 folded into the Tier-2 run as before; no failures,
   no new tooling.
+
+## SCALE synthesized-bounds item — CLOSED (2026-06-10, v0.2.4)
+
+The v0.2.3 report's future item "published SCALE percentiles to replace the
+synthesized 0.5×–1.5× bounds" is closed: the SCALE band now draws from the
+published 56-week mean ± 1 SD (−8.0 ± 6.7%, LOCF, Pi-Sunyer 2015) instead of
+mean ×0.5/×1.5, with linear interpolation to the 56-week anchors (no per-week
+SDs published). `estimated_bounds` stays True with a changed meaning
+(Gaussian ±1 SD approximation of a right-skewed distribution, not
+fabrication); the legend reads "SCALE, ±1 SD". Residuals carried forward:
+CDF responder anchors shipped data-only (marker rendering deferred per
+Gate 5), and the reference file's kg-vs-% cell (8.4) still awaits
+regeneration. Full decision record in `assumptions_tests_rationale.md` E2.

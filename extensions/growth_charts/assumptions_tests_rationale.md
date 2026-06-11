@@ -53,11 +53,11 @@ fewer than 2 observations (zero observed span).
 | `tirzepatide_surmount1` | SURMOUNT-1 | Jastreboff et al., NEJM 2022;387:205-216 (15 mg arm, ~5th–95th pct) |
 | `liraglutide_scale` | SCALE | Pi-Sunyer et al., NEJM 2015;373:11-22 |
 
-**SCALE approximation:** the SCALE publication tables in
-`glp1_science_reference.md` carry means only (4.2/6.4/7.8/8.4% at weeks
-12/24/40/56). Bounds are synthesized at mean×0.5 / mean×1.5 — the relative
-spread the STEP-1 and SURMOUNT-1 percentile columns exhibit. Replace with
-published percentiles if sourced in v0.3.
+**SCALE approximation (superseded in v0.2.4, below):** the SCALE publication
+tables in `glp1_science_reference.md` carry means only (4.2/6.4/7.8/8.4% at
+weeks 12/24/40/56). Bounds were synthesized at mean×0.5 / mean×1.5 — the
+relative spread the STEP-1 and SURMOUNT-1 percentile columns exhibit —
+through v0.2.3.
 
 **Band provenance disclosure (v0.2.3):** STEP-1 and SURMOUNT-1 bounds are
 trial-derived; SCALE's are synthesized (mean ×0.5/×1.5). A clinician
@@ -74,6 +74,32 @@ published primary-endpoint means quoted in the panel summaries (−20.9% by
 dose at 72 wk; −8.0%/8.4 kg at 56 wk) — likely estimand and kg-vs-% mixups in
 the reference tables. Band geometry was NOT changed in v0.2.3 (no-behavior-
 change constraint); reconciling the tables is a v0.3 item.
+
+**SCALE band replacement (v0.2.4):** the synthesized bounds (mean ×0.5/×1.5,
+above) are retired. The band now draws from the published 56-week LOCF
+distribution in Pi-Sunyer 2015 (NEJM 2015;373:11-22): mean −8.0%, SD 6.7
+percentage points → −1.3% (mean + 1 SD, toward zero) to −14.7% (mean − 1 SD,
+toward greater loss). Published dispersion replaces invented dispersion — the
+band's width is now a trial statistic, not a ratio borrowed from other
+trials' percentile columns. Three caveats, all stated in the new disclosure
+copy: (1) weight-loss response is right-skewed, so a symmetric Gaussian
+±1 SD band is an approximation — `estimated_bounds` therefore stays True for
+SCALE, but its MEANING changes from "fabricated bounds" to
+"imputation/normality basis"; the legend moves from "(SCALE, estimated)" to
+"(SCALE, ±1 SD)" accordingly. (2) The basis is 56-week LOCF among trial
+completers, not ITT. (3) No per-week SDs were published, so intermediate
+weeks linearly interpolate between week 0 and the 56-week anchors — the
+mid-course band shape is a modeling choice, not data. The disclosure also
+quotes the published responder rates (≥5% / >10% / >15% of body weight lost
+by 63% / 33% / 14% of patients). Those three categorical CDF anchors
+(5% → 63.2%, 10% → 33.1%, 15% → 14.4%) ship in SCALE metadata as DATA ONLY:
+Gate 5 deferred marker rendering to v-next, so adding the markers later is a
+rendering-only change against data already pinned here. Gate-1 finding:
+`glp1_science_reference.md`'s SCALE table lists the 56-week mean as 8.4 in
+the %TBWL column — that is the published KILOGRAM figure (−8.0% = 8.4 kg),
+the kg-vs-% transcription error already flagged in the v0.2.3 passage above.
+v0.2.4 ships the published −8.0%; the reference file carries a
+do-not-edit-manually header, so regenerating it remains a v-next item.
 
 **Weight-space inversion:** `upper_pct` (more loss) maps to the LOWER weight
 on screen. The band's visual top edge is `lower_pct`'s weight. The P2
