@@ -26,8 +26,12 @@ try:
         EXPECTED_RESPONSE_BANDS,
         FLAG_DEFINITIONS,
         GLP1_AGENT_KEYWORDS,
+        KG_PER_LB,
+        LB_PER_KG,
         SCALE_BOUNDS_DISCLOSURE,
         _collect_axis_weights,
+        build_headline,
+        lbs_to_display,
         assemble_template_context,
         build_chart_data,
         build_expected_band,
@@ -99,7 +103,8 @@ class TestMilestoneLines(V02TestCase):
         self.assertAlmostEqual(lines[0]["weight_lbs"], 209.0)
         self.assertAlmostEqual(lines[1]["weight_lbs"], 198.0)
         self.assertAlmostEqual(lines[2]["weight_lbs"], 187.0)
-        self.assertEqual(lines[0]["label"], "5% TBWL")
+        # v0.2.5: labels now carry the patient-unit weight (B3).
+        self.assertEqual(lines[0]["label"], "5% — 209 lb")
 
     def test_crossed_flag_tracks_latest_tbwl(self):
         lines = compute_milestone_lines(220.0, [180.0, 225.0], latest_tbwl_pct=12.1)
@@ -434,7 +439,7 @@ class TestMixedUnits(V02TestCase):
         self.assertTrue(all(200.0 < v < 235.0 for v in values))
         # Monotonic-ish downward trend once normalized.
         self.assertTrue(all(values[i] > values[i + 1] for i in range(len(values) - 1)))
-        baseline_lbs = 104.3 * 2.20462
+        baseline_lbs = 104.3 * LB_PER_KG  # v0.2.5: single conversion constant
         expected_tbwl = ((baseline_lbs - 219.0) / baseline_lbs) * 100.0
         self.assertAlmostEqual(payload["latest_tbwl_pct"], expected_tbwl, places=3)
 
@@ -786,6 +791,100 @@ class TestGate1ReferenceConcordance(V02TestCase):
         # The corrected SCALE rows must be auditable to the paper.
         self.assertIn("Pi-Sunyer", self.ref)
         self.assertIn("2015;373:11", self.ref)
+
+
+# ---------------------------------------------------------------------------
+# Verifies: v0.2.5 @ e5cbfc2 (patient-unit context: one conversion constant,
+# dual-metric headline, milestone unit labels, dual-unit trial disclosure)
+# ---------------------------------------------------------------------------
+
+PROTOCOL_SRC = (
+    Path(__file__).resolve().parent.parent / "protocols" / "growth_charts.py"
+).read_text(encoding="utf-8")
+
+
+class TestV025PatientUnitContext(V02TestCase):
+    def test_conversion_round_trip(self):
+        # kg → lb → kg within 1e-9, and the two constants are reciprocal.
+        for kg in (0.0, 8.4, 104.3, 250.0):
+            lb = kg * LB_PER_KG
+            self.assertAlmostEqual(lb * KG_PER_LB, kg, delta=1e-9)
+        self.assertAlmostEqual(LB_PER_KG * KG_PER_LB, 1.0, delta=1e-12)
+        self.assertEqual(KG_PER_LB, 0.45359237)  # exact by definition
+
+    def test_no_stray_conversion_literals(self):
+        # Every conversion factor must come from the one constant. The only
+        # places the kg magnitude may appear as a literal are the KG_PER_LB /
+        # LB_PER_KG definition lines themselves.
+        for token in ("2.2046", "0.4535", "2.20462", "0.00220462"):
+            offending = []
+            for ln in PROTOCOL_SRC.splitlines():
+                code = ln.split("#", 1)[0]  # strip comments — prose may cite the value
+                if token in code and "KG_PER_LB" not in code and "LB_PER_KG" not in code:
+                    offending.append(ln.strip())
+            self.assertEqual(offending, [], f"stray literal {token!r}: {offending}")
+
+    def test_headline_absolute_from_patient_data(self):
+        # 220 lb baseline → 201.3 lb latest = −8.5% TBWL, −18.7 lb absolute.
+        tbwl = (220.0 - 201.3) / 220.0 * 100.0
+        h = build_headline(220.0, 201.3, tbwl, "lb")
+        self.assertAlmostEqual(h["abs_change"], -18.7, places=1)
+        self.assertEqual(h["abs_change_display"], "-18.7 lb")
+        self.assertEqual(h["baseline_display"], "220 lb")
+        self.assertIn("-8.5% TBWL", h["text"])
+        self.assertIn("from 220 lb baseline", h["text"])
+
+    def test_headline_same_in_lb_whether_entered_lb_or_kg(self):
+        # P8-shape: a kg+lb mixed series normalizes to one lb headline.
+        kg_series = [
+            ("a", 104.3, "kg", 0), ("b", 228.0, "lb", 14), ("c", 102.1, "kg", 28),
+            ("d", 223.0, "lb", 42), ("e", 100.2, "kg", 56), ("f", 219.0, "lb", 70),
+        ]
+        payload = build_chart_data([raw_obs(*r) for r in kg_series], None)
+        ctx = assemble_template_context(
+            patient={"patient_id": "x"},
+            baseline=payload["baseline_data"],
+            datapoints=payload["datapoints"],
+            pipeline_timestamps=payload["_pipeline_timestamps"],
+        )
+        h = ctx["headline"]
+        self.assertEqual(h["display_unit"], "lb")
+        # Coherent single-unit readout — no kg-scale (~100) numbers leaking in.
+        self.assertTrue(h["abs_change_display"].endswith(" lb"))
+        self.assertIn("lb baseline", h["text"])
+        self.assertNotIn("kg", h["text"])
+
+    def test_milestone_labels_carry_patient_unit_weight(self):
+        # 5/10/15% of a 220 lb baseline → 209 / 198 / 187 lb labels.
+        lines = compute_milestone_lines(220.0, [180.0, 225.0], latest_tbwl_pct=12.1)
+        labels = {m["pct"]: m["label"] for m in lines}
+        self.assertEqual(labels[5.0], "5% — 209 lb")
+        self.assertEqual(labels[10.0], "10% — 198 lb")
+        self.assertEqual(labels[15.0], "15% — 187 lb")
+        # Suppressed milestones carry no label (none emitted at all).
+        suppressed = compute_milestone_lines(245.0, [239.9, 245.0], latest_tbwl_pct=2.1)
+        self.assertEqual(suppressed, [])
+
+    def test_trial_disclosure_dual_unit(self):
+        # SCALE reports an absolute mean → population line shows kg + computed lb.
+        scale = build_expected_band(200.0, START, 56.0, "liraglutide_scale")
+        line = scale["band_metadata"]["population_line"]
+        self.assertIn("8.4 kg", line)
+        self.assertIn(f"{8.4 * LB_PER_KG:.1f} lb", line)  # 18.5 lb, computed
+        self.assertIn("106.2 kg mean baseline", line)
+        self.assertIn("applied to their own baseline", line)
+
+    def test_percent_only_trials_invent_no_kg(self):
+        # STEP-1 / SURMOUNT-1 carry percent only → no population line, no kg.
+        for agent in ("semaglutide_step1", "tirzepatide_surmount1"):
+            meta = build_expected_band(200.0, START, 24.0, agent)["band_metadata"]
+            self.assertNotIn("population_line", meta)
+            self.assertNotIn("absolute_mean_kg", meta)
+
+    def test_basis_wording_corrected(self):
+        # Task A: "completers" gone from the shipped disclosure.
+        self.assertNotIn("completer", SCALE_BOUNDS_DISCLOSURE.lower())
+        self.assertIn("full analysis set", SCALE_BOUNDS_DISCLOSURE)
 
 
 if __name__ == "__main__":

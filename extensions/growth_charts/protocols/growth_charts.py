@@ -48,14 +48,42 @@ REQUIRED_TEMPLATE_KEYS = (
     "_pipeline_timestamps",
 )
 
-# Weight-unit conversion factors to pounds.
+# Exact pound/kilogram conversion — the ONE source of truth (v0.2.5). The
+# international pound is 0.45359237 kg by definition, so both directions are
+# exact. No other literal conversion factor may appear in the plugin source;
+# TestNoStrayConversionLiterals enforces this. This is the structural fix for
+# the kg-vs-% / unit bug class: one constant, used everywhere, round-trip tested.
+KG_PER_LB = 0.45359237          # exact by definition
+LB_PER_KG = 1.0 / KG_PER_LB     # 2.2046226218...
+
+# Per-patient readout unit. The pipeline normalizes every weight to pounds, so
+# `lb` is the coherent display unit for this sandbox (no kg/lb mixing possible);
+# selecting a patient's predominant recorded unit is a v-next refinement.
+DISPLAY_UNIT = "lb"
+
+# Weight-unit conversion factors to pounds. Every kg-derived factor comes from
+# LB_PER_KG so there is exactly one conversion constant in the module.
 _WEIGHT_TO_LBS = {
     "lbs": 1.0,
     "lb": 1.0,
-    "kg": 2.20462,
+    "kg": LB_PER_KG,
     "oz": 1.0 / 16.0,
-    "g": 0.00220462,
+    "g": LB_PER_KG / 1000.0,
 }
+
+
+def lbs_to_display(value_lbs: float, unit: str = DISPLAY_UNIT) -> float:
+    """Convert an internal pounds value to a patient display unit (lb or kg).
+
+    Uses the single conversion constant; raises on an unsupported display unit
+    rather than silently returning a wrong number.
+    """
+    key = str(unit).strip().lower()
+    if key in ("lb", "lbs"):
+        return float(value_lbs)
+    if key == "kg":
+        return float(value_lbs) * KG_PER_LB
+    raise ValueError(f"Unsupported display unit: {unit!r}")
 
 # ─── v0.2 constants (E1 milestones, E2 expected band, E3 velocity/flags) ───
 
@@ -92,8 +120,8 @@ GLP1_AGENT_KEYWORDS = {
 # ±1 SD approximation of a right-skewed distribution), not synthesis. Shown
 # only when estimated_bounds is True.
 SCALE_BOUNDS_DISCLOSURE = (
-    "Band is the published mean ±1 SD (−8.0 ± 6.7%) at 56 weeks, LOCF, trial "
-    "completers (Pi-Sunyer 2015). Weight-loss response is right-skewed, so "
+    "Band is the published mean ±1 SD (−8.0 ± 6.7%) at 56 weeks, full analysis "
+    "set with LOCF imputation (Pi-Sunyer 2015). Weight-loss response is right-skewed, so "
     "the symmetric band is an approximation; ≥5% / >10% / >15% of patients "
     "reached those losses in 63% / 33% / 14% of cases respectively."
 )
@@ -154,6 +182,12 @@ EXPECTED_RESPONSE_BANDS = {
             "sd": 6.7,
             "lower_bound": -1.3,   # mean + 1 SD, toward zero
             "upper_bound": -14.7,  # mean - 1 SD, toward greater loss
+            # Published absolute population mean + trial mean baseline
+            # (Pi-Sunyer 2015, liraglutide arm). The lb equivalent is computed
+            # from LB_PER_KG (not hardcoded) for the dual-unit population line;
+            # this is a POPULATION figure, never an individual patient target.
+            "absolute_mean_kg": 8.4,
+            "mean_baseline_kg": 106.2,
             # Published categorical responder rates — DATA ONLY in v0.2.4
             # (no marker rendering; Gate 5 deferred that to v-next).
             "scale_cdf_anchors": [
@@ -632,6 +666,7 @@ def compute_milestone_lines(
     baseline_lbs: float,
     axis_weights_lbs: list,
     latest_tbwl_pct: float | None = None,
+    display_unit: str = DISPLAY_UNIT,
 ) -> list[dict]:
     """E1: 5/10/15% TBWL reference lines, suppressed outside the y-domain.
 
@@ -643,17 +678,49 @@ def compute_milestone_lines(
     domain = _axis_domain(axis_weights_lbs)
     if domain is None:
         return []
+    baseline_disp = lbs_to_display(baseline_lbs, display_unit)
     lines: list[dict] = []
     for pct in MILESTONE_PCTS:
         weight = float(baseline_lbs) * (1.0 - pct / 100.0)
         if domain[0] <= weight <= domain[1]:
+            weight_disp = baseline_disp * (1.0 - pct / 100.0)
             lines.append({
                 "pct": pct,
                 "weight_lbs": weight,
-                "label": f"{pct:g}% TBWL",
+                # Patient-unit weight alongside the percent (v0.2.5), e.g.
+                # "5% — 209 lb". Computed from the baseline in the display unit,
+                # never from any trial figure.
+                "weight_display": weight_disp,
+                "display_unit": display_unit,
+                "label": f"{pct:g}% — {weight_disp:.0f} {display_unit}",
                 "crossed": latest_tbwl_pct is not None and float(latest_tbwl_pct) >= pct,
             })
     return lines
+
+
+def _enrich_population_line(meta: dict) -> dict:
+    """Add a dual-unit POPULATION line to band metadata (v0.2.5 / B4).
+
+    Only when the trial reports an absolute mean (`absolute_mean_kg`); the lb
+    equivalent is computed from LB_PER_KG, never hardcoded. Percent-only trials
+    are returned unchanged — no kg is invented. The line is explicitly labeled
+    a population figure with the trial's mean baseline so it cannot be mistaken
+    for an individual patient's target.
+    """
+    kg = meta.get("absolute_mean_kg")
+    if kg is None:
+        return dict(meta)  # copy — preserve prior dict(metadata) semantics
+    lb = kg * LB_PER_KG
+    pct = meta.get("center")
+    base_kg = meta.get("mean_baseline_kg")
+    base_clause = f", at a {base_kg:g} kg mean baseline" if base_kg else ""
+    enriched = dict(meta)
+    enriched["population_line"] = (
+        f"{meta.get('trial', 'Trial')} population: {pct:.1f}% mean "
+        f"({kg:g} kg ≈ {lb:.1f} lb lost{base_clause}). "
+        f"Your patient's band uses the {pct:.1f}% figure applied to their own baseline."
+    )
+    return enriched
 
 
 def _interp_band_at_week(table: tuple, week: float) -> tuple:
@@ -689,7 +756,7 @@ def build_expected_band(
     result = {
         "agent": agent,
         "label": band_def["label"],
-        "band_metadata": dict(band_def["metadata"]),
+        "band_metadata": _enrich_population_line(band_def["metadata"]),
         "points": [],
     }
     if baseline_lbs is None or float(baseline_lbs) <= 0:
@@ -787,6 +854,39 @@ def build_velocity_stats(velocity_pct_per_week: float | None) -> dict:
         "display": display,
         "window_weeks": VELOCITY_WINDOW_WEEKS,
         "_component": "velocity_stats",
+        "_loaded_at": _now_iso(),
+    }
+
+
+def build_headline(
+    baseline_lbs: float,
+    latest_lbs: float,
+    latest_tbwl_pct: float,
+    display_unit: str = DISPLAY_UNIT,
+) -> dict:
+    """Dual-metric headline (v0.2.5): %TBWL AND absolute change in the
+    patient's display unit, e.g. "−8.5% TBWL (−18.7 lb from 220 lb baseline)".
+
+    BOTH figures come from the patient's own baseline and latest weight in the
+    normalized display unit — never from any trial figure. Loss renders
+    negative in both metrics (matching the velocity sign convention).
+    """
+    baseline_disp = lbs_to_display(baseline_lbs, display_unit)
+    latest_disp = lbs_to_display(latest_lbs, display_unit)
+    abs_change = latest_disp - baseline_disp          # negative = weight lost
+    pct_display = -float(latest_tbwl_pct)             # negative = weight lost
+    return {
+        "tbwl_pct": float(latest_tbwl_pct),
+        "pct_display": f"{pct_display:+.1f}% TBWL",
+        "abs_change": abs_change,
+        "abs_change_display": f"{abs_change:+.1f} {display_unit}",
+        "baseline_display": f"{baseline_disp:.0f} {display_unit}",
+        "display_unit": display_unit,
+        "text": (
+            f"{pct_display:+.1f}% TBWL "
+            f"({abs_change:+.1f} {display_unit} from {baseline_disp:.0f} {display_unit} baseline)"
+        ),
+        "_component": "headline",
         "_loaded_at": _now_iso(),
     }
 
@@ -999,7 +1099,7 @@ def assemble_template_context(
         expected_band = {
             "agent": DEFAULT_AGENT,
             "label": EXPECTED_RESPONSE_BANDS[DEFAULT_AGENT]["label"],
-            "band_metadata": dict(EXPECTED_RESPONSE_BANDS[DEFAULT_AGENT]["metadata"]),
+            "band_metadata": _enrich_population_line(EXPECTED_RESPONSE_BANDS[DEFAULT_AGENT]["metadata"]),
             "points": [],
         }
     if velocity_stats is None:
@@ -1007,6 +1107,7 @@ def assemble_template_context(
     if flags is None:
         flags = []
 
+    baseline_lbs_val = float(baseline.get("value_lbs") or baseline.get("value") or 0.0)
     if datapoints:
         latest = datapoints[-1]
         latest_annotation = {
@@ -1017,6 +1118,7 @@ def assemble_template_context(
             "_loaded_at": now,
         }
         latest_tbwl_pct = latest["tbwl_pct"]
+        headline = build_headline(baseline_lbs_val, latest["value_lbs"], latest["tbwl_pct"], DISPLAY_UNIT)
     else:
         latest_annotation = {
             "tbwl_pct": 0.0,
@@ -1026,6 +1128,7 @@ def assemble_template_context(
             "_loaded_at": now,
         }
         latest_tbwl_pct = 0.0
+        headline = None
 
     timestamps = dict(pipeline_timestamps)
     timestamps.setdefault("demographics_loaded", now)
@@ -1047,6 +1150,7 @@ def assemble_template_context(
         "datapoints": datapoints,
         "latest_annotation": latest_annotation,
         "latest_tbwl_pct": latest_tbwl_pct,
+        "headline": headline,
         "milestones": milestones,
         "expected_band": {**expected_band, "_component": "expected_band_layer", "_loaded_at": now},
         "velocity_stats": velocity_stats,
@@ -1054,6 +1158,7 @@ def assemble_template_context(
         "chart_config": {
             "x_axis_type": "calendar_date",
             "y_axis_unit": "lbs",
+            "display_unit": DISPLAY_UNIT,
             "show_benchmark_overlay": bool(expected_band.get("points")),
             "benchmark_source": band_label,
             "legend_text": f"Expected response ({legend_label})",

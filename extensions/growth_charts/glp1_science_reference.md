@@ -87,7 +87,8 @@ in Weight Management." NEJM 2015;373:11-22 (SCALE trial).
 > "Mean % TBWL"; that 8.4 is the **kilogram** change (−8.4 kg), not the
 > percent change (−8.0%). The percent column below now carries the published
 > percent figure; the kilogram value is preserved in its own column. All rows
-> cite Pi-Sunyer X et al., NEJM 2015;373:11–22 (56-wk, LOCF, completers).
+> cite Pi-Sunyer X et al., NEJM 2015;373:11–22 (56-wk, full analysis set with
+> LOCF imputation).
 
 | Week | Mean % TBWL | Mean change (kg) |
 |------|------------|------------------|

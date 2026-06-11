@@ -86,8 +86,10 @@ copy: (1) weight-loss response is right-skewed, so a symmetric Gaussian
 ±1 SD band is an approximation — `estimated_bounds` therefore stays True for
 SCALE, but its MEANING changes from "fabricated bounds" to
 "imputation/normality basis"; the legend moves from "(SCALE, estimated)" to
-"(SCALE, ±1 SD)" accordingly. (2) The basis is 56-week LOCF among trial
-completers, not ITT. (3) No per-week SDs were published, so intermediate
+"(SCALE, ±1 SD)" accordingly. (2) The basis is the full analysis set with
+56-week LOCF imputation — NOT a completers analysis (LOCF carries dropouts'
+last value forward, so it includes them; completers would exclude them).
+(3) No per-week SDs were published, so intermediate
 weeks linearly interpolate between week 0 and the 56-week anchors — the
 mid-course band shape is a modeling choice, not data. The disclosure also
 quotes the published responder rates (≥5% / >10% / >15% of body weight lost

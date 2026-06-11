@@ -46,6 +46,23 @@
     line-height: 1.1;
     font-variant-numeric: tabular-nums;
   }
+  .cm-headline-value {
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1.15;
+    font-variant-numeric: tabular-nums;
+    color: #1f8a4c;
+  }
+  .cm-headline-abs {
+    font-size: 14px;
+    font-weight: 600;
+    color: #5a646e;
+  }
+  .cm-band-info-population {
+    margin-top: 6px;
+    font-size: 11.5px;
+    color: #44505c;
+  }
   .cm-velocity-label {
     font-size: 11px;
     color: #8b95a1;
@@ -242,6 +259,7 @@ const StatsBar = {
     if (!bar) return;
     const stats = this._data.velocity_stats || {};
     const flags = Array.isArray(this._data.flags) ? this._data.flags : [];
+    const headline = this._data.headline || null;
 
     const badgeHtml = flags.map(f => {
       const sev = f.severity === 'red' ? 'cm-badge-red' : 'cm-badge-amber';
@@ -249,7 +267,19 @@ const StatsBar = {
              `<span class="cm-flag-message">${f.message}</span>`;
     }).join('');
 
+    // Dual-metric headline (v0.2.5): %TBWL + absolute change in the patient's
+    // display unit, both from the patient's own data. Falls back to the
+    // velocity figure when there is no headline (empty/degraded series).
+    const headlineHtml = headline
+      ? `<div class="cm-headline" id="cm-headline">` +
+        `<div class="cm-headline-value">${headline.pct_display}` +
+        `<span class="cm-headline-abs" id="cm-headline-abs"> (${headline.abs_change_display} from ${headline.baseline_display} baseline)</span></div>` +
+        `<div class="cm-velocity-label">total loss vs. baseline</div>` +
+        `</div>`
+      : '';
+
     bar.innerHTML =
+      headlineHtml +
       `<div class="cm-velocity">` +
       `<div class="cm-velocity-value" id="cm-velocity-value">${stats.display || '—'}</div>` +
       `<div class="cm-velocity-label">${stats.window_weeks || 4}-week velocity</div>` +
@@ -470,6 +500,10 @@ const ExpectedBandLayer = {
         infoPanel.innerHTML =
           `<div class="cm-band-info-trial">About this reference band — ${meta.trial}</div>` +
           `<div>${meta.summary || ''}</div>` +
+          // Dual-unit POPULATION line (v0.2.5) — present only when the trial
+          // reports an absolute mean; labeled population, never a patient target.
+          (meta.population_line
+            ? `<div class="cm-band-info-population" id="cm-band-info-population">${meta.population_line}</div>` : '') +
           `<div class="cm-band-info-citation">${meta.citation || ''}</div>` +
           (meta.estimated_bounds && meta.disclosure
             ? `<div class="cm-band-info-disclosure">${meta.disclosure}</div>` : '');
