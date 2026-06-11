@@ -51,9 +51,9 @@
       &minus;1.3% to &minus;14.7%.</li>
   <li><strong>Honest labeling, upgraded.</strong> The legend changes from &ldquo;Expected response (SCALE,
       estimated)&rdquo; to &ldquo;Expected response (SCALE, &plusmn;1&nbsp;SD)&rdquo;, and the &#9432; panel now states
-      exactly what the band is and isn&rsquo;t: published mean &plusmn;1&nbsp;SD at 56 weeks, LOCF, trial
-      completers — and that real-world response is right-skewed, so the symmetric band is an
-      approximation.</li>
+      exactly what the band is and isn&rsquo;t: published mean &plusmn;1&nbsp;SD at 56 weeks, full
+      analysis set with LOCF imputation — and that real-world response is right-skewed, so the symmetric
+      band is an approximation.</li>
   <li><strong>Responder rates a clinician can quote.</strong> The disclosure carries the trial&rsquo;s published
       categorical outcomes: &ge;5% / &gt;10% / &gt;15% of body weight lost by 63% / 33% / 14% of patients
       respectively. The exact anchors (5%&rarr;63.2%, 10%&rarr;33.1%, 15%&rarr;14.4%) ship in SCALE metadata
@@ -93,9 +93,10 @@ in the SCALE band path only.</div>
   <li><strong>Data-first, render-later worked.</strong> The three categorical CDF anchors landed as
       metadata only (Gate&nbsp;5 deferred marker rendering): the clinically reviewed numbers are pinned in
       this version, and the v-next marker work cannot drift from them.</li>
-  <li><strong>Basis matters as much as the numbers.</strong> The band describes 56-week LOCF outcomes
-      among trial completers, not intention-to-treat — the disclosure copy states the basis explicitly so
-      the band is not over-read.</li>
+  <li><strong>Basis matters as much as the numbers.</strong> The band describes the full analysis set
+      with 56-week LOCF imputation (dropouts' last values carried forward, not a completers-only
+      analysis) — the disclosure copy states the basis explicitly so the band is not over-read.
+      <em>(Corrected in v0.2.5: the original wording said &ldquo;trial completers&rdquo;, which LOCF is not.)</em></li>
 </ul>
 
 <h2 id="future">5 · Future version considerations</h2>
