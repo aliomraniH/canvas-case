@@ -1,6 +1,6 @@
 {
     "sdk_version": "0.163.1",
-    "plugin_version": "0.2.5",
+    "plugin_version": "0.3.0",
     "name": "cardiometabolic_tracker",
     "description": "Adult GLP-1 weight-management tracker: weight vs. own baseline with %TBWL milestones, an expected-response band selected from the patient's GLP-1 agent (STEP-1/SURMOUNT-1/SCALE), and 4-week velocity with plateau/regain/rapid-loss decision support.",
     "components": {

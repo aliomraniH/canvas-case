@@ -135,6 +135,60 @@
     border-radius: 0 4px 4px 0;
   }
 
+  /* Export button + print summary view (v0.3.0) */
+  .cm-header-right { display: flex; align-items: baseline; gap: 10px; }
+  .cm-export-btn {
+    padding: 4px 12px;
+    border: 1px solid #5b86ad;
+    border-radius: 4px;
+    background: #fff;
+    color: #0f619f;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .cm-export-btn:hover, .cm-export-btn:focus { background: #f4f7fa; }
+
+  /* Print-only blocks: hidden on screen, shown by @media print below. */
+  .cm-print-only { display: none; }
+  .cm-print-header {
+    padding-bottom: 8px;
+    margin-bottom: 10px;
+    border-bottom: 2px solid #1f2933;
+    font-size: 13px;
+  }
+  .cm-print-header .cm-print-name { font-size: 16px; font-weight: 700; }
+  .cm-print-stats { margin-top: 10px; font-size: 12px; }
+  .cm-print-stats table { width: 100%; border-collapse: collapse; }
+  .cm-print-stats td { padding: 3px 8px 3px 0; vertical-align: top; }
+  .cm-print-stats td.k { font-weight: 700; white-space: nowrap; width: 160px; }
+  .cm-print-disclosure {
+    margin-top: 8px; padding: 6px 8px; font-size: 11px;
+    border-left: 3px solid #8a5a00; color: #1f2933;
+  }
+  .cm-print-footer {
+    margin-top: 12px; padding-top: 6px;
+    border-top: 1px solid #c3ccd5;
+    font-size: 10px; color: #44505c;
+  }
+  .cm-print-footer div { margin-bottom: 2px; }
+
+  @media print {
+    body { background: #fff !important; }
+    .cm-print-only { display: block; }
+    /* Interactive / screen-only chrome never prints. The print stats block
+       replaces the on-screen stats bar and legend (no duplication); tooltips
+       and hover-only content are suppressed outright. */
+    #cm-export-btn, .cm-hint, #cm-statsbar, #cm-legend, #cm-band-info,
+    #cm-data-note, #cm-diagnostics { display: none !important; }
+    .cm-layer-tooltip { display: none !important; }
+    .cm-container { max-width: 100%; margin: 0; padding: 0; }
+    .cm-chart-card { border: none; padding: 4px 0; }
+    /* Long series (≥20 obs): the SVG keeps its viewBox aspect and is capped
+       so header + chart + stats + footer fit a single portrait page. */
+    #cm-chart svg { max-height: 88mm; height: auto; }
+  }
+
   /* Diagnostics overlay (hidden until Shift+D) */
   #cm-diagnostics {
     position: fixed;
@@ -162,8 +216,13 @@
 <div id="cm-container" class="cm-container">
   <div class="cm-header">
     <div class="cm-title">Weight Trajectory</div>
-    <div class="cm-subtitle">% total body weight loss (TBWL) vs. baseline</div>
+    <div class="cm-header-right">
+      <span class="cm-subtitle">% total body weight loss (TBWL) vs. baseline</span>
+      <button id="cm-export-btn" class="cm-export-btn" type="button"
+              title="Print or save this summary as a PDF">Export</button>
+    </div>
   </div>
+  <div id="cm-print-header" class="cm-print-only cm-print-header"></div>
   <div id="cm-statsbar" class="cm-statsbar" style="display:none;"></div>
   <div class="cm-chart-card">
     <div id="cm-chart"></div>
@@ -178,6 +237,8 @@
     <div id="cm-data-note" class="cm-data-note" style="display:none;"></div>
     <div class="cm-hint">Hover a point for details. Press <strong>Shift+D</strong> for diagnostics.</div>
   </div>
+  <div id="cm-print-stats" class="cm-print-only cm-print-stats"></div>
+  <div id="cm-print-footer" class="cm-print-only cm-print-footer"></div>
 </div>
 
 <div id="cm-diagnostics" class="cm-hidden">
@@ -872,6 +933,111 @@ const TooltipManager = {
 };
 
 // ───────────────────────────────────────────────────────────────
+// 8. ExportView — print-only header, stats block, citation footer (v0.3.0).
+//    Values come from the server-assembled export_summary (same single
+//    payload — no recomputation here). DOM is built with textContent so
+//    patient-entered strings are never interpreted as HTML.
+// ───────────────────────────────────────────────────────────────
+const ExportView = {
+  _data: null,
+  _loadedAt: null,
+
+  render(summary) {
+    this._data = summary || null;
+    this._loadedAt = new Date().toISOString();
+    console.log(`[ExportView] render() at ${this._loadedAt}`);
+    if (!summary) return;
+
+    const el = (tag, cls, text) => {
+      const node = document.createElement(tag);
+      if (cls) node.className = cls;
+      if (text !== undefined) node.textContent = text;
+      return node;
+    };
+
+    // Header: name · DOB · export date (stamped at print time) · version.
+    const header = document.getElementById('cm-print-header');
+    if (header) {
+      header.innerHTML = '';
+      header.appendChild(el('div', 'cm-print-name', summary.patient_name));
+      const meta = el('div');
+      meta.appendChild(el('span', null, `DOB ${summary.patient_dob} · Exported `));
+      const dateEl = el('span', null, '');
+      dateEl.id = 'cm-print-date';
+      meta.appendChild(dateEl);
+      meta.appendChild(el('span', null,
+        ` · GLP-1 weight trajectory summary · cardiometabolic_tracker v${summary.plugin_version}`));
+      header.appendChild(meta);
+    }
+
+    // Stats block.
+    const stats = document.getElementById('cm-print-stats');
+    if (stats) {
+      stats.innerHTML = '';
+      const table = el('table');
+      const row = (k, v) => {
+        const tr = el('tr');
+        tr.appendChild(el('td', 'k', k));
+        tr.appendChild(el('td', null, v));
+        table.appendChild(tr);
+      };
+      row('Baseline weight', `${summary.baseline_display} (${summary.baseline_date_label})`);
+      row('Latest weight', `${summary.latest_display} (${summary.latest_date_label})`);
+      row('Total weight change', summary.total_tbwl_display);
+      row('Milestones', (summary.milestone_status || [])
+        .map(m => `${m.pct}% ${m.reached ? '✓ ' + m.date_label : '—'}`)
+        .join('  ·  '));
+      const flagText = (summary.flags || []).map(f => f.label).join(', ');
+      row(`${summary.velocity_window_weeks}-week velocity`,
+        flagText ? `${summary.velocity_display} — ${flagText}` : summary.velocity_display);
+      row('GLP-1 agent / reference band',
+        `${(summary.agent || '').split('_')[0] || '—'} — Expected response (${summary.band_display})`);
+      stats.appendChild(table);
+
+      // Uncertainty disclosure survives into the export VERBATIM whenever the
+      // band carries estimated bounds (clinical-integrity rule, v0.3.0).
+      if (summary.estimated_bounds && summary.band_disclosure) {
+        stats.appendChild(el('div', 'cm-print-disclosure', summary.band_disclosure));
+      }
+    }
+
+    // Footer: the three shipped trial citations, verbatim from the payload.
+    const footer = document.getElementById('cm-print-footer');
+    if (footer) {
+      footer.innerHTML = '';
+      footer.appendChild(el('div', null, 'Reference trials:'));
+      (summary.citations || []).forEach(c => footer.appendChild(el('div', null, c)));
+    }
+
+    DiagnosticsPanel.recordTimestamp('ExportView.render', this._loadedAt);
+  },
+
+  // Force the chart's final state so print never captures a mid-animation
+  // frame or a hover tooltip; stamp the export date. Runs on the Export
+  // button click AND on beforeprint (covers the browser's own print menu).
+  finalizeForPrint() {
+    const dateEl = document.getElementById('cm-print-date');
+    if (dateEl) dateEl.textContent = new Date().toISOString().slice(0, 10);
+    if (CM.svg) {
+      const path = CM.svg.select('.cm-layer-series .cm-series-path');
+      if (!path.empty()) {
+        path.interrupt().attr('stroke-dasharray', null).attr('stroke-dashoffset', null);
+      }
+      const tip = CM.svg.select('.cm-tooltip');
+      if (!tip.empty()) tip.attr('display', 'none');
+    }
+  },
+
+  destroy() {
+    ['cm-print-header', 'cm-print-stats', 'cm-print-footer'].forEach(id => {
+      const node = document.getElementById(id);
+      if (node) node.innerHTML = '';
+    });
+    this._data = null;
+  },
+};
+
+// ───────────────────────────────────────────────────────────────
 // Initialization — order matters.
 // ───────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
@@ -898,6 +1064,18 @@ document.addEventListener('DOMContentLoaded', () => {
   AnnotationLayer.render();
   TooltipManager.init(chartData.datapoints);
   DataPointLayer.animateIn();
+
+  // Export / print pipeline (v0.3.0). window.print() prints only this
+  // about:srcdoc iframe's document; the user saves as PDF from the dialog.
+  ExportView.render(chartData.export_summary);
+  const exportBtn = document.getElementById('cm-export-btn');
+  if (exportBtn) {
+    exportBtn.addEventListener('click', () => {
+      ExportView.finalizeForPrint();
+      window.print();
+    });
+  }
+  window.addEventListener('beforeprint', () => ExportView.finalizeForPrint());
 
   // Record Python-side pipeline timestamps.
   Object.entries(chartData._pipeline_timestamps || {}).forEach(([k, v]) => {

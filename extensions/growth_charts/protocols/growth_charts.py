@@ -40,6 +40,11 @@ except ImportError:  # running outside the sandbox (e.g. local pytest)
 
 PROCESSING_VERSION = "1.0"
 
+# Shown in the export header (v0.3.0). Must match CANVAS_MANIFEST.json's
+# plugin_version — TestV03Export.test_plugin_version_matches_manifest enforces
+# the pairing so the two cannot drift.
+PLUGIN_VERSION = "0.3.0"
+
 # Required keys the template context must always carry.
 REQUIRED_TEMPLATE_KEYS = (
     "baseline_data",
@@ -273,10 +278,16 @@ def load_patient_demographics(patient_id: str) -> dict:
     """
     sex_at_birth = None
     birth_date = None
+    first_name = None
+    last_name = None
     try:
         patient = Patient.objects.get(id=patient_id)
         sex_at_birth = getattr(patient, "sex_at_birth", None)
         birth_date = getattr(patient, "birth_date", None)
+        # v0.3.0 export header. SDK fields verified: Patient.first_name /
+        # Patient.last_name (canvas_sdk/v1/data/patient.py).
+        first_name = getattr(patient, "first_name", None)
+        last_name = getattr(patient, "last_name", None)
     except Patient.DoesNotExist:
         log.warning("Patient %s not found while loading demographics", patient_id)
 
@@ -284,6 +295,8 @@ def load_patient_demographics(patient_id: str) -> dict:
         "patient_id": patient_id,
         "sex_at_birth": sex_at_birth,
         "birth_date": birth_date,
+        "first_name": first_name,
+        "last_name": last_name,
         "_component": "patient_info",
         "_loaded_at": _now_iso(),
     }
@@ -1074,6 +1087,116 @@ def validate_chart_payload(payload: dict) -> tuple[bool, list[str]]:
 # SECTION 4: Render Layer (template context assembly)
 # ─────────────────────────────────────────────────────────────
 
+EM_DASH = "—"
+
+# Footer order for the export citations — all three trial citations ship on
+# every export regardless of the matched agent (v0.3.0). Strings are read from
+# EXPECTED_RESPONSE_BANDS, never retyped.
+_CITATION_AGENT_ORDER = ("semaglutide_step1", "tirzepatide_surmount1", "liraglutide_scale")
+
+
+def export_citations() -> list[str]:
+    """The three shipped trial citation strings, in fixed footer order."""
+    return [
+        EXPECTED_RESPONSE_BANDS[agent]["metadata"]["citation"]
+        for agent in _CITATION_AGENT_ORDER
+    ]
+
+
+def build_milestone_status(datapoints: list[dict]) -> list[dict]:
+    """Export stats block: reached yes/no + date for EVERY milestone pct.
+
+    Independent of compute_milestone_lines (whose axis-domain suppression is a
+    chart-rendering concern only). Reached date = date_label of the FIRST
+    datapoint whose already-computed tbwl_pct meets the threshold — a mapping
+    over the existing payload, no interpolation, no recomputation.
+    """
+    status: list[dict] = []
+    for pct in MILESTONE_PCTS:
+        reached_dp = next(
+            (dp for dp in datapoints if float(dp.get("tbwl_pct", 0.0)) >= pct), None
+        )
+        status.append({
+            "pct": pct,
+            "reached": reached_dp is not None,
+            "date_label": reached_dp["date_label"] if reached_dp else EM_DASH,
+        })
+    return status
+
+
+def build_export_summary(
+    patient: dict,
+    baseline: dict,
+    datapoints: list[dict],
+    latest_tbwl_pct: float,
+    expected_band: dict,
+    velocity_stats: dict,
+    flags: list[dict],
+    display_unit: str = DISPLAY_UNIT,
+) -> dict:
+    """v0.3.0 print-export stats block, assembled ONLY from the already-computed
+    payload (constraint 5: no second data path). Missing values render as
+    em-dashes, never blanks. All clinical strings (band label, disclosure,
+    citations) are referenced from EXPECTED_RESPONSE_BANDS verbatim.
+    """
+    name_parts = [patient.get("first_name"), patient.get("last_name")]
+    patient_name = " ".join(p for p in name_parts if p) or EM_DASH
+    birth_date = patient.get("birth_date")
+    patient_dob = f"{birth_date}" if birth_date else EM_DASH
+
+    baseline_lbs = baseline.get("value_lbs") or baseline.get("value")
+    if datapoints and baseline_lbs:
+        baseline_display = (
+            f"{lbs_to_display(baseline_lbs, display_unit):.1f} {display_unit}"
+        )
+        baseline_date_label = datapoints[0]["date_label"]
+        latest = datapoints[-1]
+        latest_display = (
+            f"{lbs_to_display(latest['value_lbs'], display_unit):.1f} {display_unit}"
+        )
+        latest_date_label = latest["date_label"]
+        total_tbwl_display = f"{-float(latest_tbwl_pct):+.1f}% TBWL"
+    else:
+        baseline_display = EM_DASH
+        baseline_date_label = EM_DASH
+        latest_display = EM_DASH
+        latest_date_label = EM_DASH
+        total_tbwl_display = EM_DASH
+
+    # Same legend-label rule as assemble_template_context: the band-basis
+    # qualifier (SCALE: "±1 SD") is part of the label wherever it appears.
+    band_label = expected_band.get("label") or EXPECTED_RESPONSE_BANDS[DEFAULT_AGENT]["label"]
+    band_metadata = expected_band.get("band_metadata") or {}
+    qualifier = band_metadata.get("legend_qualifier")
+    band_display = f"{band_label}, {qualifier}" if qualifier else band_label
+    estimated_bounds = bool(band_metadata.get("estimated_bounds"))
+
+    return {
+        "patient_name": patient_name,
+        "patient_dob": patient_dob,
+        "plugin_version": PLUGIN_VERSION,
+        "baseline_display": baseline_display,
+        "baseline_date_label": baseline_date_label,
+        "latest_display": latest_display,
+        "latest_date_label": latest_date_label,
+        "total_tbwl_display": total_tbwl_display,
+        "milestone_status": build_milestone_status(datapoints),
+        "velocity_display": velocity_stats.get("display", EM_DASH),
+        "velocity_window_weeks": velocity_stats.get("window_weeks", VELOCITY_WINDOW_WEEKS),
+        "flags": [
+            {"label": f.get("label"), "severity": f.get("severity")} for f in flags
+        ],
+        "agent": expected_band.get("agent", DEFAULT_AGENT),
+        "band_display": band_display,
+        # The uncertainty disclosure must survive into the export VERBATIM
+        # whenever the band carries estimated bounds (clinical-integrity rule).
+        "estimated_bounds": estimated_bounds,
+        "band_disclosure": band_metadata.get("disclosure") if estimated_bounds else None,
+        "citations": export_citations(),
+        "_component": "export_summary",
+        "_loaded_at": _now_iso(),
+    }
+
 
 def assemble_template_context(
     patient: dict,
@@ -1155,6 +1278,16 @@ def assemble_template_context(
         "expected_band": {**expected_band, "_component": "expected_band_layer", "_loaded_at": now},
         "velocity_stats": velocity_stats,
         "flags": flags,
+        "export_summary": build_export_summary(
+            patient=patient,
+            baseline=baseline,
+            datapoints=datapoints,
+            latest_tbwl_pct=latest_tbwl_pct,
+            expected_band=expected_band,
+            velocity_stats=velocity_stats,
+            flags=flags,
+            display_unit=DISPLAY_UNIT,
+        ),
         "chart_config": {
             "x_axis_type": "calendar_date",
             "y_axis_unit": "lbs",
