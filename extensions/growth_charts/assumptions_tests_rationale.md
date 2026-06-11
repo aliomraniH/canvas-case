@@ -8,6 +8,57 @@ data), `debug_skill_findings.md` (live-validation tiering log),
 
 ---
 
+## Patient-unit context (v0.2.5)
+
+**Design principle (binding):**
+> Percent total body weight loss is unit-invariant and portable across
+> patients; absolute weight is not. Per-patient targets are ALWAYS the
+> published percent applied to the patient's own baseline in the patient's own
+> recorded unit. The trial's kilogram figures are population means at the
+> trial's mean baseline and are NEVER converted into an individual patient's
+> target.
+
+**Single conversion constant (B1):** `KG_PER_LB = 0.45359237` (exact — the
+international pound) and `LB_PER_KG = 1/KG_PER_LB`. Every kg-derived factor in
+the module (including the `_WEIGHT_TO_LBS` normalization path from v0.2) comes
+from these; no other literal conversion factor may appear in the plugin source
+(`TestNoStrayConversionLiterals` greps for `2.2046`/`0.4535`/etc. outside the
+constant definitions). This is the structural fix for the kg-vs-% / unit bug
+class — one constant, used everywhere, round-trip tested to 1e-9. (The kg
+factor gained ~6 digits of precision vs the old `2.20462`; the change to
+kg-sourced weights is sub-milligram and within every existing tolerance.)
+
+**Dual-metric headline (B2):** the stats bar shows current loss as BOTH %TBWL
+and absolute change in the patient's display unit
+(`−12.1% TBWL (−26.6 lb from 220 lb baseline)`), both computed from the
+patient's own baseline and latest weight — never from a trial figure. Display
+unit is `lb` (the normalization target; predominant-recorded-unit selection is
+a v-next refinement), which is automatically coherent for mixed-unit patients
+(P8) — no kg/lb mixing is possible.
+
+**Milestone unit labels (B3):** the 5/10/15% lines carry the patient-unit
+weight (`5% — 209 lb`), computed `baseline_in_display_unit × (1 − pct/100)`.
+Suppression rule (A2) unchanged.
+
+**Dual-unit trial disclosure (B4):** where a trial reports an absolute mean,
+the ⓘ panel shows both units with an explicit population label and the trial
+baseline, so the lb equivalent is visible without hand-conversion AND cannot be
+mistaken for a patient target — e.g. `SCALE population: −8.0% mean (8.4 kg ≈
+18.5 lb lost, at a 106.2 kg mean baseline). Your patient's band uses the −8.0%
+figure applied to their own baseline.` The lb figure is computed via
+`LB_PER_KG`, never hardcoded. **Only SCALE got this line** — its metadata
+carries a published absolute mean (8.4 kg, 106.2 kg baseline, Pi-Sunyer 2015);
+STEP-1 and SURMOUNT-1 carry percent only, so they stay percent-only (no kg is
+invented, per Gate 1).
+
+**Band-basis wording correction (Task A):** the SCALE disclosure previously
+said "LOCF, trial completers" — wrong, since LOCF carries dropouts' last
+values forward and therefore is NOT a completers analysis. Corrected
+everywhere (`grep -i completer` clean of stale claims) to "full analysis set
+with LOCF imputation."
+
+---
+
 ## E1 — %TBWL milestone lines
 
 **Computation** (`compute_milestone_lines`): weight at 5/10/15% TBWL =

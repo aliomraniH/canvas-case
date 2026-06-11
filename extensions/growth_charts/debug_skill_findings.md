@@ -131,3 +131,20 @@ fabrication); the legend reads "SCALE, ±1 SD". Residuals carried forward:
 CDF responder anchors shipped data-only (marker rendering deferred per
 Gate 5), and the reference file's kg-vs-% cell (8.4) still awaits
 regeneration. Full decision record in `assumptions_tests_rationale.md` E2.
+
+## v0.2.5 — patient-unit context + basis wording (2026-06-10)
+
+- **Task A (copy fix):** repo-wide `grep -i completer` drove the correction —
+  "trial completers" was wrong for an LOCF basis (LOCF includes dropouts via
+  carried-forward values). Corrected source/docs/reference/report; the only
+  remaining hits are the deliberate "NOT a completers analysis" explanations
+  and a gitignored debug-output JSON that regenerates on the next run.
+- **Tier 2 (Gate 4 live smoke):** extended the existing assertion script (Gate
+  5 — extend, don't duplicate) for the new milestone label form, the
+  dual-metric headline, the SCALE population dual-unit line, and the P8
+  single-unit coherence check. Two existing assertions were re-synced to the
+  changed label format — same pattern as the pytest re-syncs, since the spec
+  moved the milestone label contract.
+- **Reusable note:** a "no stray conversion literal" test must strip comments
+  before grepping — prose that *cites* the constant value (e.g. "0.45359237 kg
+  by definition") is not a stray literal. Caught on first run.
