@@ -448,6 +448,10 @@ Screenshots from all sessions are uploaded here. Use as visual history.
   self-contained HTML release report into `extensions/deploy_reports/`
   (committed, one file per version) and satisfies items 1–2 of
   build-discipline's session-end checklist.
+- `~/.claude/skills/toolbox-review/` — periodic audit of `TOOLBOX.md`, tests,
+  and skills (30-day cadence or `/toolbox-review`); output in
+  `extensions/toolbox_reviews/`. Source committed at
+  `extensions/skills/toolbox-review/`.
 
 **`node_modules/` (Playwright):**
 ```

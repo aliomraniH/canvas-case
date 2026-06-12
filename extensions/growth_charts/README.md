@@ -6,6 +6,10 @@ against their **own baseline** (first weight observation) over calendar time,
 annotated with % total body weight loss (TBWL). Adapted from the pediatric
 growth_charts plugin — no population percentiles, no sex stratification.
 
+> **Toolbox:** the master index of every debug/test tool, skill, test suite,
+> and setup artifact for this plugin lives at
+> [`extensions/TOOLBOX.md`](../TOOLBOX.md).
+
 ## What it shows (v0.2.0)
 
 A **Weight Trajectory** action button in the chart-summary Vitals section
