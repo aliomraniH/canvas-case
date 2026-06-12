@@ -19,8 +19,9 @@ Organized into five layers (see component_architecture.md):
 # `dict[str, object]` are evaluated at definition time and raise NameError.
 from __future__ import annotations
 
+import html
 import json
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from canvas_sdk.effects import Effect
 from canvas_sdk.effects.launch_modal import LaunchModalEffect
@@ -40,10 +41,16 @@ except ImportError:  # running outside the sandbox (e.g. local pytest)
 
 PROCESSING_VERSION = "1.0"
 
-# Shown in the export header (v0.3.0). Must match CANVAS_MANIFEST.json's
-# plugin_version — TestV03Export.test_plugin_version_matches_manifest enforces
-# the pairing so the two cannot drift.
-PLUGIN_VERSION = "0.3.0"
+# Shown in the export header (v0.3.0) and the support-report payload (v0.4.0).
+# Must match CANVAS_MANIFEST.json's plugin_version — the version-pairing tests
+# (TestV03Export.test_plugin_version_matches_manifest and the v0.4 suite)
+# enforce the pairing so the two cannot drift.
+PLUGIN_VERSION = "0.4.0"
+
+# The one modal surface this plugin launches into. Single source for the
+# handler's LaunchModalEffect calls AND the support report's launch_target
+# field (v0.4.0), so the recorded value cannot drift from the real target.
+LAUNCH_TARGET = LaunchModalEffect.TargetType.RIGHT_CHART_PANE_LARGE
 
 # Required keys the template context must always carry.
 REQUIRED_TEMPLATE_KEYS = (
@@ -243,8 +250,12 @@ FLAG_DEFINITIONS = {
 
 
 def _now_iso() -> str:
-    """Current time as an ISO-8601 string (helper, no mutable default anywhere)."""
-    return datetime.now().isoformat()
+    """Current UTC time as an ISO-8601 string with Z suffix (v0.4.0; was naive
+    local, which made Python pipeline entries disagree with the JS entries'
+    toISOString() in the event log and export). UTC-Z is the storage/transport
+    format only — nothing clinician-facing renders these values (audited
+    v0.4.0); any future display must convert to local at the display point."""
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _json_default(value):
@@ -1198,6 +1209,143 @@ def build_export_summary(
     }
 
 
+# ── v0.4.0 support-report export + weight-data table ──
+
+# Support-report schema version. Future transports (email/direct-to-support)
+# are explicitly out of scope for 0.4.0; bump this only when the payload
+# shape changes.
+LOG_EXPORT_SCHEMA_VERSION = "1"
+
+# Universal value for the weight-data table's source/method column. Gate 2
+# (v0.4.0): verified against canvas_sdk/v1/data/observation.py on disk AND
+# docs.canvasmedical.com/sdk/data-observation that the SDK 0.163.1 Observation
+# model exposes NO method or device field, so the column cannot be populated
+# without heuristic inference — which is forbidden.
+SOURCE_METHOD_NOT_RECORDED = "Not recorded"
+
+# Origin taxonomy mirrors the debug-capture console-mode classification:
+# entries the plugin itself recorded are "plugin"; entries attributed to the
+# host EHR page are "host"; anything unattributable is "unknown".
+LOG_ORIGINS = ("plugin", "host", "unknown")
+
+_PLUGIN_EVENT_PREFIXES = ("python.", "js.")
+_PLUGIN_COMPONENT_NAMES = frozenset({
+    "StatsBar",
+    "ChartScaffold",
+    "ExpectedBandLayer",
+    "BaselineLayer",
+    "MilestoneLayer",
+    "DataPointLayer",
+    "AnnotationLayer",
+    "TooltipManager",
+    "ExportView",
+    "DiagnosticsPanel",
+})
+
+
+def classify_log_origin(name) -> str:
+    """Classify an event-log entry name into the debug-capture origin taxonomy.
+
+    `python.*` / `js.*` events and the plugin's own component lifecycle events
+    are plugin-attributable; `host.*` is reserved for entries attributed to
+    the surrounding EHR page; everything else is "unknown" — never guessed
+    into "plugin".
+    """
+    if not isinstance(name, str) or not name:
+        return "unknown"
+    if name.startswith(_PLUGIN_EVENT_PREFIXES):
+        return "plugin"
+    if name.split(".", 1)[0] in _PLUGIN_COMPONENT_NAMES:
+        return "plugin"
+    if name.startswith("host."):
+        return "host"
+    return "unknown"
+
+
+def build_log_export(
+    entries,
+    *,
+    launch_target: str,
+    patient_fhir_id,
+    plugin_version: str = PLUGIN_VERSION,
+    generated_at=None,
+    user_agent=None,
+) -> dict:
+    """Pure mapping: event-log entries + metadata in, schema-valid payload out
+    (same pattern as build_export_summary — no second data path, fully
+    unit-testable without a browser).
+
+    Schema knowledge lives HERE only. The JS side fills exactly three
+    browser-only values at download time — generated_at, user_agent, and its
+    own runtime entry appends — and serializes; it constructs no schema keys.
+
+    patient_fhir_id is the ID ONLY — never name, DOB, or any other
+    demographic. The v0.4 tests scan the payload recursively for demographic
+    keys to keep it that way.
+    """
+    norm_entries = []
+    for entry in entries or []:
+        name = str(entry.get("name") or "")
+        origin = entry.get("origin")
+        if origin not in LOG_ORIGINS:
+            origin = classify_log_origin(name)
+        norm_entries.append({
+            "name": name,
+            "timestamp_utc": str(entry.get("timestamp_utc") or ""),
+            "origin": origin,
+        })
+    return {
+        "schema_version": LOG_EXPORT_SCHEMA_VERSION,
+        "plugin_version": plugin_version,
+        "generated_at": generated_at,  # browser-only fill at download time
+        "launch_target": launch_target,
+        "patient_fhir_id": patient_fhir_id,
+        "user_agent": user_agent,  # browser-only fill at download time
+        "entries": norm_entries,
+    }
+
+
+def _capture_iso(date_obj) -> str:
+    """ISO-8601 string for a table row's capture datetime.
+
+    Aware datetimes (FHIR-created observations) are normalized to UTC with a
+    Z suffix; naive ones (UI-created) are emitted as recorded — converting
+    them would mean guessing an offset, which the timestamp-normalization
+    rule forbids.
+    """
+    if date_obj is None:
+        return ""
+    if getattr(date_obj, "tzinfo", None) is not None:
+        return date_obj.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    return date_obj.isoformat()
+
+
+def build_table_rows(datapoints: list[dict], baseline: dict) -> list[dict]:
+    """v0.4.0 read-only weight-data table rows, derived ONLY from the
+    already-computed datapoints the chart consumed (no second data path —
+    no FHIR/SDK queries at render time).
+
+    Display strings follow the shipped conventions: positive TBWL = weight
+    lost = "↓X.X%" (the v0.2.5 headline convention); Δ is signed pounds vs.
+    baseline. source/method is SOURCE_METHOD_NOT_RECORDED universally per the
+    Gate 2 verdict (see that constant) — never inferred.
+    """
+    baseline_lbs = float(baseline.get("value_lbs") or baseline.get("value") or 0.0)
+    rows: list[dict] = []
+    for dp in datapoints or []:
+        value_lbs = float(dp.get("value_lbs") or 0.0)
+        tbwl_pct = float(dp.get("tbwl_pct") or 0.0)
+        arrow = "↓" if tbwl_pct >= 0 else "↑"
+        rows.append({
+            "capture_iso": _capture_iso(dp.get("date_obj")),
+            "weight_display": f"{value_lbs:.1f} lb",
+            "delta_display": f"{value_lbs - baseline_lbs:+.1f} lb",
+            "tbwl_display": f"{arrow}{abs(tbwl_pct):.1f}%",
+            "source_method": SOURCE_METHOD_NOT_RECORDED,
+        })
+    return rows
+
+
 def assemble_template_context(
     patient: dict,
     baseline: dict,
@@ -1288,6 +1436,19 @@ def assemble_template_context(
             flags=flags,
             display_unit=DISPLAY_UNIT,
         ),
+        # v0.4.0 support-report scaffold: schema + Python pipeline entries,
+        # pre-classified. The browser fills generated_at/user_agent and
+        # appends its runtime entries at download time — nothing else.
+        "log_export_base": build_log_export(
+            [
+                {"name": f"python.{key}", "timestamp_utc": value}
+                for key, value in timestamps.items()
+            ],
+            launch_target=LAUNCH_TARGET.value,
+            patient_fhir_id=patient.get("patient_id"),
+        ),
+        # v0.4.0 weight-data table (read-only view inside the event-log panel).
+        "table_rows": build_table_rows(datapoints, baseline),
         "chart_config": {
             "x_axis_type": "calendar_date",
             "y_axis_unit": "lbs",
@@ -1378,19 +1539,28 @@ class GenerateVitalsGraphs(ActionButton):
 
         # 5. Render — serialize the whole context for the template's JSON.parse()
         chart_data_json = json.dumps(context, default=_json_default)
-        html = render_to_string("templates/chart.html", {"chart_data_json": chart_data_json})
+        rendered_html = render_to_string(
+            "templates/chart.html", {"chart_data_json": chart_data_json}
+        )
         return [
             LaunchModalEffect(
-                content=html,
-                target=LaunchModalEffect.TargetType.RIGHT_CHART_PANE_LARGE,
+                content=rendered_html,
+                target=LAUNCH_TARGET,
                 title="Weight Trajectory",
             ).apply()
         ]
 
     def _render_error(self, errors: list[str]) -> list[Effect]:
-        """Validation failure → an error modal (locked Option B), never [] or a banner."""
-        items = "".join(f"<li>{e}</li>" for e in errors)
-        html = (
+        """Validation failure → an error modal (locked Option B), never [] or a banner.
+
+        Every interpolated value is html.escape()d (R2, v0.4.0): the
+        ValueError path carries observation-entered content (e.g.
+        "Unknown weight unit: {unit!r}" from convert_weight_to_lbs), and
+        about:srcdoc inherits the EHR parent origin, so unescaped markup
+        here would execute in the host context.
+        """
+        items = "".join(f"<li>{html.escape(str(e))}</li>" for e in errors)
+        error_html = (
             "<div style=\"font-family: Lato, Arial, sans-serif; padding: 24px;\">"
             "<h2 style=\"margin-top:0;\">Unable to render weight trajectory</h2>"
             "<p>The chart could not be generated because the data did not pass validation:</p>"
@@ -1399,8 +1569,8 @@ class GenerateVitalsGraphs(ActionButton):
         )
         return [
             LaunchModalEffect(
-                content=html,
-                target=LaunchModalEffect.TargetType.RIGHT_CHART_PANE_LARGE,
+                content=error_html,
+                target=LAUNCH_TARGET,
                 title="Weight Trajectory",
             ).apply()
         ]

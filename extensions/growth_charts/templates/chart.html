@@ -189,14 +189,15 @@
     #cm-chart svg { max-height: 88mm; height: auto; }
   }
 
-  /* Diagnostics overlay (hidden until Shift+D) */
+  /* Event-log overlay (hidden until Shift+D; v0.4.0: dismissible, with
+     support-report download and a read-only weight-data view) */
   #cm-diagnostics {
     position: fixed;
     top: 12px;
     right: 12px;
     max-height: 80vh;
     overflow: auto;
-    width: 360px;
+    width: 420px;
     background: rgba(17, 24, 33, 0.95);
     color: #d7f5e9;
     font-family: 'SFMono-Regular', Consolas, monospace;
@@ -211,9 +212,41 @@
   #cm-diagnostics table { width: 100%; border-collapse: collapse; }
   #cm-diagnostics td { padding: 2px 4px; vertical-align: top; }
   #cm-diagnostics td.k { color: #f797b9; white-space: nowrap; padding-right: 10px; }
+  #cm-diagnostics td.o { color: #99a3ad; }
+  .cm-log-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+  .cm-log-actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .cm-log-actions button {
+    background: transparent; border: 1px solid #44505c; color: #d7f5e9;
+    border-radius: 4px; font-size: 11px; cursor: pointer; padding: 2px 8px;
+    font-family: inherit;
+  }
+  .cm-log-actions button:hover, .cm-log-actions button:focus { background: rgba(255,255,255,0.08); }
+  #cm-log-close-btn { font-size: 14px; line-height: 1; padding: 2px 7px; }
+  .cm-log-toggle { margin: 0 0 8px; display: flex; gap: 4px; }
+  .cm-log-tab {
+    background: transparent; border: 1px solid #44505c; color: #99a3ad;
+    border-radius: 4px; font-size: 11px; padding: 2px 10px; cursor: pointer;
+    font-family: inherit;
+  }
+  .cm-log-tab.cm-active { color: #d7f5e9; border-color: #9bd1fa; }
+  #cm-log-caveat {
+    margin: 0 0 8px; padding: 6px 8px; font-size: 11px;
+    color: #ecc55f; border-left: 3px solid #ecc55f;
+  }
+  #cm-weight-table-wrap { max-height: 60vh; overflow: auto; }
+  #cm-weight-table th {
+    text-align: left; color: #9bd1fa; padding: 2px 6px 4px 0;
+    font-weight: 600; white-space: nowrap;
+  }
+  #cm-weight-table td { padding: 2px 6px 2px 0; }
+  #cm-log-fallback {
+    max-height: 40vh; overflow: auto; white-space: pre-wrap;
+    background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px;
+    margin: 8px 0 0; font-family: inherit;
+  }
 </style>
 
-<div id="cm-container" class="cm-container">
+<div id="cm-container" class="cm-container" tabindex="-1">
   <div class="cm-header">
     <div class="cm-title">Weight Trajectory</div>
     <div class="cm-header-right">
@@ -235,15 +268,32 @@
     </div>
     <div id="cm-band-info" class="cm-band-info" hidden></div>
     <div id="cm-data-note" class="cm-data-note" style="display:none;"></div>
-    <div class="cm-hint">Hover a point for details. Press <strong>Shift+D</strong> for diagnostics.</div>
+    <div class="cm-hint">Hover a point for details. Press <strong>Shift+D</strong> for technical log.</div>
   </div>
   <div id="cm-print-stats" class="cm-print-only cm-print-stats"></div>
   <div id="cm-print-footer" class="cm-print-only cm-print-footer"></div>
 </div>
 
-<div id="cm-diagnostics" class="cm-hidden">
-  <h3>Pipeline Diagnostics</h3>
+<div id="cm-diagnostics" class="cm-hidden" role="dialog" aria-label="Plugin event log">
+  <div class="cm-log-header">
+    <h3>Plugin event log — technical support only. Not for clinical use.</h3>
+    <div class="cm-log-actions">
+      <button id="cm-log-download-btn" type="button"
+              title="Download support report (JSON)">Download</button>
+      <button id="cm-log-close-btn" type="button" aria-label="Close event log"
+              title="Close (Esc)">&times;</button>
+    </div>
+  </div>
+  <div class="cm-log-toggle">
+    <button id="cm-log-view-log" type="button" class="cm-log-tab cm-active">Event log</button>
+    <button id="cm-log-view-data" type="button" class="cm-log-tab">Weight data</button>
+  </div>
+  <div id="cm-log-caveat" style="display:none;"></div>
   <table id="cm-diagnostics-body"></table>
+  <div id="cm-weight-table-wrap" style="display:none;">
+    <table id="cm-weight-table"></table>
+  </div>
+  <pre id="cm-log-fallback" style="display:none;"></pre>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
@@ -271,33 +321,165 @@ function cmParseDate(value) {
 }
 
 // ───────────────────────────────────────────────────────────────
-// DiagnosticsPanel — defined FIRST so every component can record
-// timestamps during its own init()/render().
+// DiagnosticsPanel (internal name) — the user-facing "Plugin event
+// log" overlay. Defined FIRST so every component can record event
+// timestamps during its own init()/render(). v0.4.0: dismissible
+// (×, Esc, Shift+D toggle), support-report download, and a read-only
+// weight-data view. All DOM here is built with textContent — never
+// markup interpolation. Support-report schema knowledge lives
+// server-side in build_log_export; this object only fills the
+// browser-only values (timestamp + browser identity) at download
+// time and appends its own runtime entries.
 // ───────────────────────────────────────────────────────────────
 const DiagnosticsPanel = {
-  timestamps: {},
+  entries: [],        // [{name, timestamp_utc, origin}] — server entries seeded by init(), JS entries appended
+  _exportBase: null,  // server-built support-report scaffold
+  _tableRows: [],     // server-derived weight-data rows
   _visible: false,
+  _view: 'log',
 
-  recordTimestamp(component, ts) {
-    this.timestamps[component] = ts;
+  init(exportBase, tableRows) {
+    this._exportBase = exportBase || null;
+    this._tableRows = tableRows || [];
+    this.entries = ((exportBase && exportBase.entries) || []).slice();
+  },
+
+  recordTimestamp(name, ts) {
+    // Everything recorded through this path is the plugin's own code.
+    this.entries.push({ name: name, timestamp_utc: ts, origin: 'plugin' });
     if (this._visible) this.render();
   },
 
   render() {
-    const body = document.getElementById('cm-diagnostics-body');
-    if (!body) return;
-    const rows = Object.entries(this.timestamps)
-      .map(([k, v]) => `<tr><td class="k">${k}</td><td>${v}</td></tr>`)
-      .join('');
-    body.innerHTML = rows;
+    const logTable = document.getElementById('cm-diagnostics-body');
+    const dataWrap = document.getElementById('cm-weight-table-wrap');
+    if (!logTable || !dataWrap) return;
+    const isLog = this._view === 'log';
+    const tabLog = document.getElementById('cm-log-view-log');
+    const tabData = document.getElementById('cm-log-view-data');
+    if (tabLog) tabLog.classList.toggle('cm-active', isLog);
+    if (tabData) tabData.classList.toggle('cm-active', !isLog);
+    logTable.style.display = isLog ? '' : 'none';
+    dataWrap.style.display = isLog ? 'none' : '';
+    if (isLog) this._renderLog(logTable);
+    else this._renderData();
+    this._renderCaveat(!isLog);
   },
 
-  toggle() {
-    this._visible = !this._visible;
+  _renderLog(table) {
+    table.textContent = '';
+    this.entries.forEach((e) => {
+      const tr = document.createElement('tr');
+      [['k', e.name], [null, e.timestamp_utc], ['o', e.origin]].forEach(([cls, text]) => {
+        const td = document.createElement('td');
+        if (cls) td.className = cls;
+        td.textContent = text;
+        tr.appendChild(td);
+      });
+      table.appendChild(tr);
+    });
+  },
+
+  _renderData() {
+    const table = document.getElementById('cm-weight-table');
+    if (!table) return;
+    table.textContent = '';
+    const head = document.createElement('tr');
+    ['Date', 'Weight (lb)', 'Δ baseline (lb)', '%TBWL', 'Source/method'].forEach((h) => {
+      const th = document.createElement('th');
+      th.textContent = h;
+      head.appendChild(th);
+    });
+    table.appendChild(head);
+    this._tableRows.forEach((r) => {
+      const tr = document.createElement('tr');
+      const dateTd = document.createElement('td');
+      const d = cmParseDate(r.capture_iso);
+      dateTd.textContent = d ? d.toLocaleString() : (r.capture_iso || '—');
+      dateTd.title = r.capture_iso; // full ISO as recorded (UTC-Z for FHIR-created)
+      tr.appendChild(dateTd);
+      [r.weight_display, r.delta_display, r.tbwl_display, r.source_method].forEach((v) => {
+        const td = document.createElement('td');
+        td.textContent = v;
+        tr.appendChild(td);
+      });
+      table.appendChild(tr);
+    });
+  },
+
+  // The chart's sparse/single-measurement caveat must also appear in the
+  // weight-data view when active — mirrored from the live banner so the
+  // two can never disagree.
+  _renderCaveat(active) {
+    const caveat = document.getElementById('cm-log-caveat');
+    const src = document.getElementById('cm-data-note');
+    if (!caveat) return;
+    const text = (active && src && src.style.display !== 'none') ? src.textContent : '';
+    caveat.textContent = text;
+    caveat.style.display = text ? 'block' : 'none';
+  },
+
+  open() {
+    this._visible = true;
     const panel = document.getElementById('cm-diagnostics');
-    if (!panel) return;
-    panel.classList.toggle('cm-hidden', !this._visible);
-    if (this._visible) this.render();
+    if (panel) panel.classList.remove('cm-hidden');
+    this.render();
+  },
+
+  close() {
+    this._visible = false;
+    const panel = document.getElementById('cm-diagnostics');
+    if (panel) panel.classList.add('cm-hidden');
+    const fallback = document.getElementById('cm-log-fallback');
+    if (fallback) fallback.style.display = 'none';
+    // Focus returns to the chart container on dismiss (D1).
+    const container = document.getElementById('cm-container');
+    if (container) container.focus();
+  },
+
+  toggle() { this._visible ? this.close() : this.open(); },
+
+  setView(view) {
+    this._view = view === 'data' ? 'data' : 'log';
+    this.render();
+  },
+
+  // Support-report download (v0.4.0). Tier 1 of the proven-fallback ladder:
+  // Blob + anchor. The runtime guard falls back to a copyable view; the
+  // print-pipeline reuse is the documented next tier if live verification
+  // shows Blob downloads are blocked in the srcdoc iframe.
+  downloadSupportReport() {
+    const base = this._exportBase || {};
+    const generatedAt = new Date().toISOString();
+    const payload = Object.assign({}, base, {
+      generated_at: generatedAt,
+      user_agent: navigator.userAgent,
+      entries: this.entries,
+    });
+    const json = JSON.stringify(payload, null, 2);
+    const fname = 'cardiometabolic_tracker_log_' +
+      generatedAt.slice(0, 19).replace(/:/g, '-') + 'Z.json';
+    try {
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fname;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      console.error('[EventLog] Blob download failed; showing copyable view', err);
+      this._showCopyFallback(json);
+    }
+  },
+
+  _showCopyFallback(json) {
+    const pre = document.getElementById('cm-log-fallback');
+    if (!pre) return;
+    pre.textContent = json;
+    pre.style.display = 'block';
   },
 };
 
@@ -1017,7 +1199,13 @@ const ExportView = {
   // button click AND on beforeprint (covers the browser's own print menu).
   finalizeForPrint() {
     const dateEl = document.getElementById('cm-print-date');
-    if (dateEl) dateEl.textContent = new Date().toISOString().slice(0, 10);
+    if (dateEl) {
+      // Local calendar date (R1, v0.4.0): toISOString() stamped the UTC
+      // date, which is off by a day for clinicians near midnight outside UTC.
+      const d = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      dateEl.textContent = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    }
     if (CM.svg) {
       const path = CM.svg.select('.cm-layer-series .cm-series-path');
       if (!path.empty()) {
@@ -1042,6 +1230,11 @@ const ExportView = {
 // ───────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   const chartData = JSON.parse('{{ chart_data_json|escapejs }}');
+
+  // Seed the event log FIRST: Python pipeline entries arrive pre-classified
+  // in the server-built support-report scaffold; every component render below
+  // appends its own runtime entries on top.
+  DiagnosticsPanel.init(chartData.log_export_base, chartData.table_rows);
 
   StatsBar.render(chartData);
   ChartScaffold.init(chartData.chart_config);
@@ -1077,16 +1270,21 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   window.addEventListener('beforeprint', () => ExportView.finalizeForPrint());
 
-  // Record Python-side pipeline timestamps.
-  Object.entries(chartData._pipeline_timestamps || {}).forEach(([k, v]) => {
-    DiagnosticsPanel.recordTimestamp(`python.${k}`, v);
-  });
   DiagnosticsPanel.recordTimestamp('js.domContentLoaded', new Date().toISOString());
 
-  // Shift+D toggles diagnostics overlay.
+  // Shift+D toggles the event-log overlay; Esc closes it (D1).
   document.addEventListener('keydown', (e) => {
     if (e.shiftKey && (e.key === 'D' || e.key === 'd')) DiagnosticsPanel.toggle();
+    else if (e.key === 'Escape' && DiagnosticsPanel._visible) DiagnosticsPanel.close();
   });
+  const logClose = document.getElementById('cm-log-close-btn');
+  if (logClose) logClose.addEventListener('click', () => DiagnosticsPanel.close());
+  const logDownload = document.getElementById('cm-log-download-btn');
+  if (logDownload) logDownload.addEventListener('click', () => DiagnosticsPanel.downloadSupportReport());
+  const viewLog = document.getElementById('cm-log-view-log');
+  if (viewLog) viewLog.addEventListener('click', () => DiagnosticsPanel.setView('log'));
+  const viewData = document.getElementById('cm-log-view-data');
+  if (viewData) viewData.addEventListener('click', () => DiagnosticsPanel.setView('data'));
 });
 
 // ───────────────────────────────────────────────────────────────
