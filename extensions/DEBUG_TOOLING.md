@@ -243,6 +243,22 @@ return scriptTags.map(s => s.textContent.substring(0, 300));
 - The zero-observation validation-blocked patient is Jane Will
   (`53e062d0dc5249eb9309cb900754a050`), not "Carol Singh" (RUNBOOK §6 stale).
 
+### Downloads + event log inside the plugin iframe (v0.4.0, verified live 2026-06-12)
+
+- **Blob + anchor downloads WORK inside the `about:srcdoc` iframe** (Chromium):
+  `URL.createObjectURL(new Blob(...))` + programmatic `a.click()` triggers a
+  real download with the anchor's `download` filename. Playwright sees it via
+  `page.waitForEvent('download')` with `acceptDownloads: true` on the context —
+  the L5 print-pipeline / copyable-`<pre>` fallbacks were never needed.
+- SDK 0.163.1 `Observation` exposes NO `method` or `device` field — fields are
+  `patient, is_member_of, category, units, value, note_id, name,
+  effective_datetime` + audit/id base fields (verified against SDK source on
+  disk AND docs.canvasmedical.com/sdk/data-observation, Gate 2 v0.4.0). Any
+  source/method display must render "Not recorded", never infer.
+- Real keyboard delivery into the srcdoc iframe: click an element inside the
+  frame to move focus, then `page.keyboard.press(...)` reaches the iframe
+  document's keydown listeners (used for Shift+D / Esc verification).
+
 ### Canvas API URL structure
 
 Canvas REST API uses `/api/<Resource>/` (not `/api/r4/` FHIR format):
