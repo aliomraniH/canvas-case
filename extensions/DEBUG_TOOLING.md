@@ -243,6 +243,27 @@ return scriptTags.map(s => s.textContent.substring(0, 300));
 - The zero-observation validation-blocked patient is Jane Will
   (`53e062d0dc5249eb9309cb900754a050`), not "Carol Singh" (RUNBOOK §6 stale).
 
+### Manual baseline / SimpleAPI + sandbox gotchas (v0.5.0, verified live 2026-06-13)
+
+- **The Canvas sandbox blocks `str.format` / `format_map`** (RestrictedPython
+  "not safe" guard, plugin_runner/sandbox.py). Build strings with f-strings,
+  never `TEMPLATE.format(...)`. Symptom that cost a redeploy: only the code
+  path that hit `.format()` 500'd (correction-header saves) while sibling
+  paths worked — mocks ran under CPython and stayed green.
+- An in-iframe `fetch('/plugin-io/api/<plugin>/<route>', {credentials:
+  'same-origin'})` POST works from the `about:srcdoc` modal frame with the
+  staff session cookie; `StaffSessionAuthMixin` reads the staff id from the
+  `canvas-logged-in-user-id` header (never trust client input for it).
+- A top-level `const X = {...}` in the template is NOT `window.X`. A
+  separately appended `<script>` (e.g. a dialog block) that needs the chart's
+  objects must get them via an explicit `window.X = X;` export.
+- Note effect needs a real `note_type_id` + `practice_location_id` +
+  `provider_id`; resolve them at runtime (NoteType active Encounter types,
+  first PracticeLocation, session staff) and fail closed — don't hardcode.
+- Playwright trusted `click()` can silently no-op once dialog content
+  scrolls inside the srcdoc iframe; synthetic `el.click()` via
+  `frame.evaluate` is reliable for these flows.
+
 ### Downloads + event log inside the plugin iframe (v0.4.0, verified live 2026-06-12)
 
 - **Blob + anchor downloads WORK inside the `about:srcdoc` iframe** (Chromium):
