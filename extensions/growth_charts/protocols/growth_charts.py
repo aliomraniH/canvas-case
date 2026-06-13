@@ -1846,15 +1846,19 @@ def build_correction_header(
     *, old_weight_lb: float, old_date_label: str, new_weight_lb: float,
     new_date_label: str, staff_display: str, timestamp: str, reason: str,
 ) -> str:
-    """Amendment 3 correction header — exact template, pinned verbatim."""
-    return CORRECTION_HEADER_TEMPLATE.format(
-        old_weight=f"{old_weight_lb:.1f}",
-        old_date=old_date_label,
-        new_weight=f"{new_weight_lb:.1f}",
-        new_date=new_date_label,
-        staff=staff_display,
-        timestamp=timestamp,
-        reason=reason,
+    """Amendment 3 correction header — exact template, pinned verbatim.
+
+    Built with f-strings, NOT CORRECTION_HEADER_TEMPLATE.format(): the Canvas
+    sandbox blocks str.format/format_map outright (plugin_runner/sandbox.py
+    "not safe" guard — found live in v0.5.0 when only correction saves
+    500'd). The v0.5 suite pins this output equal to the template render so
+    the two cannot drift.
+    """
+    return (
+        f"CORRECTION — Baseline revised from {old_weight_lb:.1f} lb "
+        f"(as of {old_date_label}) to {new_weight_lb:.1f} lb "
+        f"(as of {new_date_label}) by {staff_display}, {timestamp}. "
+        f"Reason: {reason}."
     )
 
 

@@ -497,6 +497,12 @@ const DiagnosticsPanel = {
     pre.style.display = 'block';
   },
 };
+// Exposed on window so the separately-appended baseline-dialog script
+// (v0.5.0) can record baseline-set / medication-selected / note-saved /
+// bounds-override events into THIS session's event log — a top-level
+// `const` is not a window property, so the dialog's window.DiagnosticsPanel
+// reference would otherwise be a silent no-op (caught live in v0.5.0).
+window.DiagnosticsPanel = DiagnosticsPanel;
 
 // ───────────────────────────────────────────────────────────────
 // 0. StatsBar — velocity stat + flag badges above the chart (v0.2).

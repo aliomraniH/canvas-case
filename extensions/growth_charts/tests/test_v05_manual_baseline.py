@@ -369,6 +369,18 @@ class TestCorrectionTrail(V05TestCase):
             "to 241.0 lb (as of 2026-04-17) by Ali Omrani, MD, "
             "2026-06-12T20:00:00Z. Reason: Scale recalibrated.",
         )
+        # The f-string construction must stay in lockstep with the pinned
+        # template (the sandbox blocks str.format at runtime; pytest runs
+        # under CPython where rendering the template here is legal).
+        self.assertEqual(
+            header,
+            CORRECTION_HEADER_TEMPLATE.format(
+                old_weight="243.0", old_date="2026-04-17",
+                new_weight="241.0", new_date="2026-04-17",
+                staff="Ali Omrani, MD", timestamp="2026-06-12T20:00:00Z",
+                reason="Scale recalibrated",
+            ),
+        )
 
     def test_metadata_value_schema_and_revision_chain(self):
         value = build_manual_baseline_value(
@@ -698,6 +710,13 @@ class TestEmptyStateDocument(V05TestCase):
         self.assertIn("baseline_dialog_html", TEMPLATE_SRC)
         self.assertIn("cm-discrepancy", TEMPLATE_SRC)
         self.assertIn("CM_BASELINE_CTX", TEMPLATE_SRC)
+
+    def test_event_log_panel_exposed_on_window_for_dialog(self):
+        # The dialog records baseline-action events via window.DiagnosticsPanel
+        # (separate <script>; a top-level const is not a window property).
+        # Caught live in v0.5.0 — pin the exposure so it cannot regress.
+        self.assertIn("window.DiagnosticsPanel = DiagnosticsPanel", TEMPLATE_SRC)
+        self.assertIn("window.DiagnosticsPanel", BASELINE_DIALOG_HTML)
 
     def test_error_document_still_has_no_baseline_ui(self):
         handler = GenerateVitalsGraphs(Mock(), Mock())
