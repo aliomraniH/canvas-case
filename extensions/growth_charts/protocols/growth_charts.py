@@ -22,12 +22,28 @@ from __future__ import annotations
 import html
 import json
 from datetime import date, datetime, timedelta, timezone
+from uuid import uuid4
 
+from canvas_sdk.commands import PlanCommand
 from canvas_sdk.effects import Effect
 from canvas_sdk.effects.launch_modal import LaunchModalEffect
+from canvas_sdk.effects.note.note import Note as NoteEffect
+from canvas_sdk.effects.patient_metadata import PatientMetadata as PatientMetadataEffect
+from canvas_sdk.effects.simple_api import JSONResponse, Response
 from canvas_sdk.handlers.action_button import ActionButton, SHOW_BUTTON_REGEX
+from canvas_sdk.handlers.simple_api import SimpleAPI, StaffSessionAuthMixin, api
 from canvas_sdk.templates import render_to_string
-from canvas_sdk.v1.data import Patient, Observation, Note, Medication
+from canvas_sdk.v1.data import (
+    Medication,
+    Note,
+    NoteType,
+    Observation,
+    Patient,
+    PatientMetadata,
+    PracticeLocation,
+    Staff,
+)
+from canvas_sdk.v1.data.note import NoteTypeCategories
 
 try:
     # Canvas sandbox provides the runtime logger.
@@ -43,14 +59,277 @@ PROCESSING_VERSION = "1.0"
 
 # Shown in the export header (v0.3.0) and the support-report payload (v0.4.0).
 # Must match CANVAS_MANIFEST.json's plugin_version — the version-pairing tests
-# (TestV03Export.test_plugin_version_matches_manifest and the v0.4 suite)
+# (TestV03Export.test_plugin_version_matches_manifest and the v0.4/v0.5 suites)
 # enforce the pairing so the two cannot drift.
-PLUGIN_VERSION = "0.4.0"
+PLUGIN_VERSION = "0.5.0"
 
 # The one modal surface this plugin launches into. Single source for the
 # handler's LaunchModalEffect calls AND the support report's launch_target
 # field (v0.4.0), so the recorded value cannot drift from the real target.
 LAUNCH_TARGET = LaunchModalEffect.TargetType.RIGHT_CHART_PANE_LARGE
+
+# ── v0.5.0 provider-entered manual baseline ──
+
+MANUAL_BASELINE_METADATA_KEY = "cardiometabolic_tracker:manual_baseline"
+
+# Metadata value schema. "2" carries baseline_date (the CLINICAL anchor,
+# Amendment 1) distinct from set_at_utc (the entry timestamp). Unknown schema
+# versions parse fail-closed to None — never a guess.
+MANUAL_BASELINE_SCHEMA_VERSION = "2"
+
+# Render-gate cutover (decision 3C): patients whose earliest weight
+# observation RECORD was created before this instant keep the legacy
+# visit-1-baseline rendering, byte-identical (covers the nine ZZTEST fixtures
+# and all pre-existing demo patients with zero writes to any of them).
+# Record-creation time is used, NOT effective/service dates, because seeded
+# and imported observations are routinely backdated.
+MANUAL_BASELINE_CUTOVER = datetime(2026, 6, 12, 18, 0, 0, tzinfo=timezone.utc)
+
+# Adult weight plausibility bounds, lb — soft bounds for the manual-baseline
+# dialog (confirm-to-override outside, hard-reject only non-positive).
+# SCOPE GUARD (Amendment 4): this constant and validate_baseline_form are
+# wired ONLY into the manual-baseline POST path of THIS adult tracker. This
+# plugin's ancestry is a pediatric growth chart — these bounds must never be
+# imported by or shared with any pediatric-reachable code path; the v0.5
+# suite asserts the constant is referenced nowhere else.
+ADULT_WEIGHT_PLAUSIBILITY_LB = (50.0, 1100.0)
+
+# Dialog dropdown → expected-response band agent key. None = no projection
+# band, ever (bands are trial-specific; an unconfirmed agent never earns one).
+MANUAL_AGENT_OPTIONS = {
+    "semaglutide": "semaglutide_step1",
+    "tirzepatide": "tirzepatide_surmount1",
+    "liraglutide": "liraglutide_scale",
+    "other": None,
+}
+MANUAL_AGENT_LABELS = {
+    "semaglutide": "Semaglutide (Wegovy)",
+    "tirzepatide": "Tirzepatide (Zepbound)",
+    "liraglutide": "Liraglutide (Saxenda)",
+    "other": "Other / not on GLP-1 therapy",
+}
+
+# Note-type preference for the counseling note (Amendment 2). Tier-1
+# read-only inventory of pxbuilder-aomrani (2026-06-12, /admin notetype
+# list): "Chronic care management" (chronic_care_management_note, Encounter)
+# and "Office visit" (SNOMED 308335008, Encounter) both exist and are active.
+# Runtime lookup stays defensive anyway: preferred codes first, then any
+# active Encounter type, then Chart Review as the recorded-and-surfaced
+# fallback, else fail closed.
+PREFERRED_NOTE_TYPE_CODES = ("chronic_care_management_note", "308335008")
+
+MANUAL_NOTE_TITLE = "Weight management — provider-confirmed baseline"
+
+EMPTY_STATE_MESSAGE = (
+    "We don't have a confirmed baseline for this patient yet — "
+    "please enter it to begin tracking."
+)
+
+BOUNDS_CONFIRM_MESSAGE = (
+    "This weight is outside the typical adult range — confirm to save."
+)
+
+CPT_REMINDER_HEADING = "Note saved. Should this note also go to billing?"
+CPT_REMINDER_BODY = (
+    "Weight-management counseling documented in this note may be eligible for "
+    "CPT reimbursement (for example, obesity counseling or chronic care "
+    "management codes). Eligibility depends on payer, plan, and visit context "
+    "— please confirm with your billing team. This is a documentation "
+    "reminder, not billing advice or a guarantee of reimbursement."
+)
+# Appended to the reminder only when the note had to fall back to a
+# chart-review type (Amendment 2) — also recorded in the deploy report.
+CPT_REMINDER_REVIEW_ADDENDUM = (
+    "Documented as chart review — confirm note type with billing."
+)
+
+# Insurance-grade correction header (Amendment 3) — pinned verbatim by test.
+CORRECTION_HEADER_TEMPLATE = (
+    "CORRECTION — Baseline revised from {old_weight} lb (as of {old_date}) "
+    "to {new_weight} lb (as of {new_date}) by {staff}, {timestamp}. "
+    "Reason: {reason}."
+)
+
+# The manual-baseline dialog: one shared markup+JS block, kept as a Python
+# constant (not a template include) so the empty-state document can be
+# assembled without render_to_string and both documents ship the exact same
+# dialog. It self-initializes from window.CM_BASELINE_CTX, which each host
+# document sets first. Every provider-entered string is rendered back via
+# textContent only (R2 discipline); the JS constructs no metadata-schema
+# keys — the server owns that schema entirely.
+BASELINE_DIALOG_HTML = """
+<style>
+  #cm-bl-overlay { position: fixed; inset: 0; background: rgba(17,24,33,0.45);
+    display: none; align-items: flex-start; justify-content: center;
+    z-index: 10000; font-family: Lato, Arial, sans-serif; }
+  #cm-bl-dialog { background: #fff; border-radius: 8px; margin-top: 40px;
+    width: 440px; max-width: 92vw; max-height: 86vh; overflow: auto;
+    padding: 18px 20px; box-shadow: 0 10px 32px rgba(0,0,0,0.35); }
+  #cm-bl-dialog h2 { margin: 0 0 4px; font-size: 16px; color: #1f2933; }
+  #cm-bl-dialog label { display: block; font-size: 12px; font-weight: 700;
+    color: #44505c; margin: 10px 0 3px; }
+  #cm-bl-dialog input, #cm-bl-dialog select, #cm-bl-dialog textarea {
+    width: 100%; box-sizing: border-box; padding: 6px 8px; font-size: 13px;
+    border: 1px solid #c3ccd5; border-radius: 4px; font-family: inherit; }
+  #cm-bl-dialog textarea { min-height: 70px; resize: vertical; }
+  .cm-bl-required::after { content: " *"; color: #c0392b; }
+  .cm-bl-actions { margin-top: 14px; display: flex; gap: 8px; justify-content: flex-end; }
+  .cm-bl-actions button { padding: 6px 14px; border-radius: 4px; font-size: 13px;
+    cursor: pointer; border: 1px solid #5b86ad; background: #fff; color: #0f619f; }
+  .cm-bl-actions button.cm-bl-primary { background: #0f619f; color: #fff; }
+  #cm-bl-errors { color: #c0392b; font-size: 12.5px; margin-top: 10px; white-space: pre-line; }
+  #cm-bl-confirm { display: none; margin-top: 10px; padding: 8px 10px; font-size: 12.5px;
+    background: #fdf1d7; border-left: 3px solid #ecc55f; color: #8a5a00; }
+  #cm-bl-success { display: none; }
+  #cm-bl-reminder { margin-top: 10px; padding: 10px 12px; background: #eef4f9;
+    border-left: 3px solid #0f619f; font-size: 12.5px; color: #1f2933; }
+  #cm-bl-reminder-heading { font-weight: 700; margin-bottom: 4px; }
+  #cm-bl-reason-wrap { display: none; }
+  #cm-baseline-open { padding: 4px 12px; border: 1px solid #5b86ad; border-radius: 4px;
+    background: #fff; color: #0f619f; font-size: 12px; font-weight: 700; cursor: pointer; }
+</style>
+<div id="cm-bl-overlay" role="dialog" aria-modal="true" aria-label="Set baseline">
+  <div id="cm-bl-dialog">
+    <div id="cm-bl-form-wrap">
+      <h2 id="cm-bl-title">Set baseline</h2>
+      <label class="cm-bl-required" for="cm-bl-weight">Baseline weight (lb)</label>
+      <input id="cm-bl-weight" type="number" step="0.1" min="0">
+      <label class="cm-bl-required" for="cm-bl-date">Baseline as of</label>
+      <input id="cm-bl-date" type="date">
+      <label class="cm-bl-required" for="cm-bl-agent">Which medication is the patient starting?</label>
+      <select id="cm-bl-agent">
+        <option value="">Select…</option>
+        <option value="semaglutide">Semaglutide (Wegovy)</option>
+        <option value="tirzepatide">Tirzepatide (Zepbound)</option>
+        <option value="liraglutide">Liraglutide (Saxenda)</option>
+        <option value="other">Other / not on GLP-1 therapy</option>
+      </select>
+      <label for="cm-bl-minutes">Time spent counseling (minutes, optional)</label>
+      <input id="cm-bl-minutes" type="number" step="1" min="1" max="600">
+      <label class="cm-bl-required" for="cm-bl-note">Accompanying note</label>
+      <textarea id="cm-bl-note" placeholder="Counseling summary for the patient's Note section"></textarea>
+      <div id="cm-bl-reason-wrap">
+        <label class="cm-bl-required" for="cm-bl-reason">Reason for revision</label>
+        <textarea id="cm-bl-reason" placeholder="Required when revising an existing baseline"></textarea>
+      </div>
+      <div id="cm-bl-confirm"></div>
+      <div id="cm-bl-errors"></div>
+      <div class="cm-bl-actions">
+        <button type="button" id="cm-bl-cancel">Cancel</button>
+        <button type="button" id="cm-bl-save" class="cm-bl-primary">Save</button>
+      </div>
+    </div>
+    <div id="cm-bl-success">
+      <h2>Baseline saved</h2>
+      <div id="cm-bl-reminder">
+        <div id="cm-bl-reminder-heading"></div>
+        <div id="cm-bl-reminder-body"></div>
+      </div>
+      <p id="cm-bl-reopen" style="font-size:12.5px;color:#44505c;"></p>
+      <div class="cm-bl-actions">
+        <button type="button" id="cm-bl-dismiss" class="cm-bl-primary">Dismiss</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const ctx = window.CM_BASELINE_CTX || null;
+  if (!ctx || !ctx.patient_id) return;
+  const $ = (id) => document.getElementById(id);
+  const slot = $('cm-baseline-btn-slot');
+  if (!slot) return;
+
+  const isCorrection = !!ctx.current;
+  const openBtn = document.createElement('button');
+  openBtn.id = 'cm-baseline-open';
+  openBtn.type = 'button';
+  openBtn.textContent = isCorrection ? 'Adjust baseline' : 'Set baseline';
+  slot.appendChild(openBtn);
+
+  const overlay = $('cm-bl-overlay');
+  let confirmBounds = false;
+
+  function openDialog() {
+    $('cm-bl-title').textContent = isCorrection ? 'Adjust baseline' : 'Set baseline';
+    const today = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const todayStr = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+    const dateEl = $('cm-bl-date');
+    dateEl.max = todayStr;                    // no future baselines
+    if (!dateEl.value) dateEl.value = todayStr;  // defaults to today
+    if (isCorrection) {
+      $('cm-bl-reason-wrap').style.display = 'block';
+      if (!$('cm-bl-weight').value && ctx.current.weight_lb) {
+        $('cm-bl-weight').value = ctx.current.weight_lb;
+      }
+      if (ctx.current.agent && !$('cm-bl-agent').value) {
+        $('cm-bl-agent').value = ctx.current.agent;
+      }
+      if (ctx.current.baseline_date_label) dateEl.value = ctx.current.baseline_date_label;
+    }
+    confirmBounds = false;
+    $('cm-bl-confirm').style.display = 'none';
+    $('cm-bl-errors').textContent = '';
+    overlay.style.display = 'flex';
+    $('cm-bl-weight').focus();
+  }
+
+  function closeDialog() { overlay.style.display = 'none'; }
+
+  function showSaved(resp) {
+    $('cm-bl-form-wrap').style.display = 'none';
+    $('cm-bl-success').style.display = 'block';
+    const reminder = (resp && resp.cpt_reminder) || {};
+    $('cm-bl-reminder-heading').textContent = reminder.heading || '';
+    $('cm-bl-reminder-body').textContent = reminder.body || '';
+    $('cm-bl-reopen').textContent =
+      'Close and reopen Weight Trajectory to see the updated tracking.';
+    if (window.DiagnosticsPanel && resp && resp.events) {
+      resp.events.forEach((e) => window.DiagnosticsPanel.recordTimestamp(e.name, e.timestamp_utc));
+    }
+  }
+
+  function save() {
+    const payload = {
+      patient_id: ctx.patient_id,
+      weight_lb: $('cm-bl-weight').value,
+      baseline_date: $('cm-bl-date').value,
+      agent: $('cm-bl-agent').value,
+      minutes: $('cm-bl-minutes').value,
+      note_text: $('cm-bl-note').value,
+      reason: $('cm-bl-reason') ? $('cm-bl-reason').value : '',
+      confirm_bounds: confirmBounds,
+    };
+    $('cm-bl-errors').textContent = '';
+    fetch('/plugin-io/api/cardiometabolic_tracker/baseline', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify(payload),
+    }).then((r) => r.json().then((data) => ({ ok: r.ok, data })))
+      .then(({ ok, data }) => {
+        if (data && data.status === 'saved') { showSaved(data); return; }
+        if (data && data.status === 'confirm_required') {
+          const c = $('cm-bl-confirm');
+          c.textContent = (data.message || 'Confirm to save.') + ' Press Save again to confirm.';
+          c.style.display = 'block';
+          confirmBounds = true;
+          return;
+        }
+        const errs = (data && data.errors) || ['Save failed' + (ok ? '' : ' (' + 'HTTP error' + ')')];
+        $('cm-bl-errors').textContent = errs.join('\\n');
+      })
+      .catch(() => { $('cm-bl-errors').textContent = 'Network error — baseline was not saved.'; });
+  }
+
+  openBtn.addEventListener('click', openDialog);
+  $('cm-bl-cancel').addEventListener('click', closeDialog);
+  $('cm-bl-save').addEventListener('click', save);
+  $('cm-bl-dismiss').addEventListener('click', closeDialog);
+});
+</script>
+"""
 
 # Required keys the template context must always carry.
 REQUIRED_TEMPLATE_KEYS = (
@@ -331,9 +610,78 @@ def load_weight_observations_raw(patient_id: str) -> list[dict]:
                 "unit_original": getattr(obs, "units", None),  # SDK field is 'units' (plural)
                 "canvas_note_id": _note_id_of(obs),
                 "_loaded_at": _now_iso(),
+                # v0.5.0 STRICTLY ADDITIVE: record-creation time for the
+                # manual-baseline render-gate cutover. All pre-existing keys
+                # above are regression-pinned unchanged by the v0.5 suite.
+                "created": getattr(obs, "created", None),
             }
         )
     return raw
+
+
+def load_manual_baseline(patient_id: str) -> dict | None:
+    """Read the provider-entered baseline (v0.5.0) for the render gate.
+    Fail-closed: missing row or malformed value → None."""
+    try:
+        row = (
+            PatientMetadata.objects.filter(
+                patient__id=patient_id, key=MANUAL_BASELINE_METADATA_KEY
+            )
+            .order_by("-modified")
+            .first()
+        )
+    except Exception as exc:  # metadata read must never block the chart
+        log.warning(
+            "Manual-baseline metadata lookup failed for patient %s (%s: %s)",
+            patient_id, type(exc).__name__, exc,
+        )
+        return None
+    if row is None:
+        return None
+    return parse_manual_baseline(getattr(row, "value", None))
+
+
+def select_counseling_note_type() -> tuple[object | None, bool]:
+    """(note type, used_review_fallback) for the manual-baseline counseling
+    note (Amendment 2). Preference: Tier-1-verified encounter codes →
+    any active Encounter type → Chart Review (recorded fallback) → None
+    (caller fails closed)."""
+    encounter = NoteType.objects.filter(
+        category=NoteTypeCategories.ENCOUNTER, is_active=True
+    )
+    for code in PREFERRED_NOTE_TYPE_CODES:
+        note_type = encounter.filter(code=code).order_by("-dbid").first()
+        if note_type is not None:
+            return note_type, False
+    note_type = encounter.order_by("-dbid").first()
+    if note_type is not None:
+        return note_type, False
+    note_type = (
+        NoteType.objects.filter(category=NoteTypeCategories.REVIEW, is_active=True)
+        .order_by("-dbid")
+        .first()
+    )
+    if note_type is not None:
+        return note_type, True
+    return None, False
+
+
+def staff_display_name(staff_id) -> str:
+    """'First Last, Suffix' for the correction header; falls back to the id
+    (a real identifier — never a fabricated placeholder)."""
+    try:
+        staff = Staff.objects.filter(id=staff_id).first()
+    except Exception:
+        staff = None
+    if staff is None:
+        return str(staff_id)
+    parts = " ".join(
+        p for p in (getattr(staff, "first_name", ""), getattr(staff, "last_name", "")) if p
+    )
+    suffix = getattr(staff, "suffix", "") or ""
+    if parts and suffix:
+        return f"{parts}, {suffix}"
+    return parts or str(staff_id)
 
 
 def batch_load_notes(note_ids: list[str]) -> dict[str, object]:
@@ -389,15 +737,12 @@ def attach_dates_to_observations(
     return joined
 
 
-def detect_glp1_agent(patient_id: str) -> str:
-    """Detect which GLP-1 agent the patient is on, for expected-band selection.
+def _match_glp1_agents(patient_id: str) -> tuple:
+    """(matched agent-key set, error string|None) from the active-med list.
 
     Matches active-medication coding display text against GLP1_AGENT_KEYWORDS.
-    Exactly one agent matched → that agent. No match, multiple matches, or ANY
-    query/schema error → DEFAULT_AGENT with the fallback reason logged.
-
     The broad except is a deliberate addendum requirement: a medication-model
-    schema surprise must degrade to the default band, never crash the chart.
+    schema surprise must degrade gracefully, never crash the chart.
     Field access verified against canvas_sdk 0.163.1 source + docs:
     Medication.objects.for_patient(id).active(); med.codings.all() → .display.
     """
@@ -419,25 +764,50 @@ def detect_glp1_agent(patient_id: str) -> str:
             for agent, keywords in GLP1_AGENT_KEYWORDS.items():
                 if any(kw in text for text in texts for kw in keywords):
                     matched.add(agent)
-        if len(matched) == 1:
-            return next(iter(matched))
-        if matched:
-            log.warning(
-                "Multiple GLP-1 agents matched for patient %s (%s); defaulting to %s",
-                patient_id, sorted(matched), DEFAULT_AGENT,
-            )
-        else:
-            log.info(
-                "No GLP-1 medication matched for patient %s; defaulting to %s",
-                patient_id, DEFAULT_AGENT,
-            )
-        return DEFAULT_AGENT
-    except Exception as exc:  # degrade to default band — never block the chart
+        return matched, None
+    except Exception as exc:  # degrade, never block the chart
+        return set(), f"{type(exc).__name__}: {exc}"
+
+
+def detect_glp1_agent(patient_id: str) -> str:
+    """Detect which GLP-1 agent the patient is on, for expected-band selection.
+
+    Exactly one agent matched → that agent. No match, multiple matches, or ANY
+    query/schema error → DEFAULT_AGENT with the fallback reason logged.
+    (v0.5.0: matching core extracted to _match_glp1_agents so the manual-
+    baseline discrepancy check can see "no active GLP-1" distinctly; this
+    function's legacy semantics are unchanged and regression-pinned.)
+    """
+    matched, error = _match_glp1_agents(patient_id)
+    if error is not None:
         log.warning(
-            "Medication lookup failed for patient %s (%s: %s); defaulting to %s",
-            patient_id, type(exc).__name__, exc, DEFAULT_AGENT,
+            "Medication lookup failed for patient %s (%s); defaulting to %s",
+            patient_id, error, DEFAULT_AGENT,
         )
         return DEFAULT_AGENT
+    if len(matched) == 1:
+        return next(iter(matched))
+    if matched:
+        log.warning(
+            "Multiple GLP-1 agents matched for patient %s (%s); defaulting to %s",
+            patient_id, sorted(matched), DEFAULT_AGENT,
+        )
+    else:
+        log.info(
+            "No GLP-1 medication matched for patient %s; defaulting to %s",
+            patient_id, DEFAULT_AGENT,
+        )
+    return DEFAULT_AGENT
+
+
+def detect_glp1_agent_raw(patient_id: str) -> str | None:
+    """Strict detection for the v0.5.0 discrepancy check: exactly one active
+    GLP-1 match → that agent key; no match / ambiguous / lookup error → None
+    (meaning "no contradiction evidence" — never a guessed default)."""
+    matched, error = _match_glp1_agents(patient_id)
+    if error is None and len(matched) == 1:
+        return next(iter(matched))
+    return None
 
 
 # ─────────────────────────────────────────────────────────────
@@ -948,7 +1318,13 @@ def detect_flags(datapoints: list[dict], velocity_pct_per_week: float | None) ->
     return flags
 
 
-def build_chart_data(observations_raw: list, notes_or_baseline=None, agent: str = DEFAULT_AGENT) -> dict:
+def build_chart_data(
+    observations_raw: list,
+    notes_or_baseline=None,
+    agent: str | None = DEFAULT_AGENT,
+    baseline_override: dict | None = None,
+    band_weeks_override: float | None = None,
+) -> dict:
     """Orchestrate the Processing Layer and return the chart payload.
 
     Second argument is overloaded (locked Option B):
@@ -960,6 +1336,18 @@ def build_chart_data(observations_raw: list, notes_or_baseline=None, agent: str 
 
     `agent` selects the expected-response band table (v0.2 / A3); callers pass
     detect_glp1_agent()'s result so this function stays SDK-free.
+
+    v0.5.0 manual-baseline additions — all defaults preserve legacy behavior
+    byte-identically (regression-pinned by the four baseline suites):
+      - baseline_override: {"date", "value_lbs", "source_id"} from the
+        provider-entered baseline. Week-0 / %TBWL / band anchoring then derive
+        from baseline_override["date"] (the CLINICAL baseline_date, Amendment
+        1) — never from the entry timestamp. With an override, zero usable
+        observations is a valid state (datapoints = []).
+      - agent=None: render NO projection band (bands are trial-specific;
+        provider said Other / not on GLP-1).
+      - band_weeks_override: minimum band horizon in weeks (manual mode shows
+        the band even before two observations exist).
     """
     if isinstance(notes_or_baseline, dict):
         observations_with_dates = attach_dates_to_observations(observations_raw, notes_or_baseline)
@@ -967,7 +1355,10 @@ def build_chart_data(observations_raw: list, notes_or_baseline=None, agent: str 
         observations_with_dates = list(observations_raw)
 
     observations_with_dates = dedupe_same_day(observations_with_dates)
-    baseline = _baseline_record(observations_with_dates)
+    if baseline_override is not None:
+        baseline = baseline_override
+    else:
+        baseline = _baseline_record(observations_with_dates)
 
     datapoints = [
         build_observation_processed(obs, baseline) for obs in observations_with_dates
@@ -978,11 +1369,25 @@ def build_chart_data(observations_raw: list, notes_or_baseline=None, agent: str 
     latest_tbwl_pct = datapoints[-1]["tbwl_pct"] if datapoints else 0.0
 
     # v0.2 derived layers. Band only with ≥2 datapoints (a single observation
-    # has zero observed span, so the band would just stretch the axes).
-    last_week = datapoints[-1]["weeks_since_baseline"] if len(datapoints) >= 2 else 0.0
-    expected_band = build_expected_band(
-        baseline["value_lbs"], baseline["date"], last_week, agent
-    )
+    # has zero observed span, so the band would just stretch the axes) —
+    # unless manual mode supplies a band horizon explicitly.
+    if band_weeks_override is not None:
+        last_week = band_weeks_override
+        if datapoints:
+            last_week = max(last_week, datapoints[-1]["weeks_since_baseline"])
+    else:
+        last_week = datapoints[-1]["weeks_since_baseline"] if len(datapoints) >= 2 else 0.0
+    if agent is None:
+        expected_band = {
+            "agent": "none",
+            "label": "No projection — not on GLP-1 therapy",
+            "band_metadata": {},
+            "points": [],
+        }
+    else:
+        expected_band = build_expected_band(
+            baseline["value_lbs"], baseline["date"], last_week, agent
+        )
     axis_weights = _collect_axis_weights(datapoints, baseline["value_lbs"], expected_band)
     milestones = compute_milestone_lines(baseline["value_lbs"], axis_weights, latest_tbwl_pct)
     velocity = compute_velocity(datapoints)
@@ -1020,8 +1425,15 @@ def build_chart_data(observations_raw: list, notes_or_baseline=None, agent: str 
 # ─────────────────────────────────────────────────────────────
 
 
-def validate_chart_payload(payload: dict) -> tuple[bool, list[str]]:
-    """Run BEFORE any LaunchModalEffect. Returns (is_valid, [error messages])."""
+def validate_chart_payload(
+    payload: dict, allow_empty_datapoints: bool = False
+) -> tuple[bool, list[str]]:
+    """Run BEFORE any LaunchModalEffect. Returns (is_valid, [error messages]).
+
+    allow_empty_datapoints (v0.5.0): manual-baseline mode renders a valid
+    chart from the provider-entered baseline before any follow-up weight
+    exists. Default False keeps every legacy call site byte-identical.
+    """
     errors: list[str] = []
 
     # 1. baseline present and positive
@@ -1029,10 +1441,11 @@ def validate_chart_payload(payload: dict) -> tuple[bool, list[str]]:
     if not baseline_data or float(baseline_data.get("value", 0) or 0) <= 0:
         errors.append("Missing or non-positive baseline value")
 
-    # 2. datapoints non-empty
+    # 2. datapoints non-empty (unless manual mode explicitly allows empty)
     datapoints = payload.get("datapoints")
     if not datapoints:
-        errors.append("No datapoints to render")
+        if not allow_empty_datapoints:
+            errors.append("No datapoints to render")
         datapoints = []
 
     # 3. no future observation dates
@@ -1144,11 +1557,16 @@ def build_export_summary(
     velocity_stats: dict,
     flags: list[dict],
     display_unit: str = DISPLAY_UNIT,
+    baseline_date_label_override: str | None = None,
 ) -> dict:
     """v0.3.0 print-export stats block, assembled ONLY from the already-computed
     payload (constraint 5: no second data path). Missing values render as
     em-dashes, never blanks. All clinical strings (band label, disclosure,
     citations) are referenced from EXPECTED_RESPONSE_BANDS verbatim.
+
+    baseline_date_label_override (v0.5.0): manual mode anchors the baseline
+    to the provider-entered clinical date, not the first observation's date.
+    Default None keeps legacy output byte-identical.
     """
     name_parts = [patient.get("first_name"), patient.get("last_name")]
     patient_name = " ".join(p for p in name_parts if p) or EM_DASH
@@ -1160,7 +1578,7 @@ def build_export_summary(
         baseline_display = (
             f"{lbs_to_display(baseline_lbs, display_unit):.1f} {display_unit}"
         )
-        baseline_date_label = datapoints[0]["date_label"]
+        baseline_date_label = baseline_date_label_override or datapoints[0]["date_label"]
         latest = datapoints[-1]
         latest_display = (
             f"{lbs_to_display(latest['value_lbs'], display_unit):.1f} {display_unit}"
@@ -1346,6 +1764,199 @@ def build_table_rows(datapoints: list[dict], baseline: dict) -> list[dict]:
     return rows
 
 
+# ── v0.5.0 manual-baseline pure functions ──
+
+
+def parse_manual_baseline(value) -> dict | None:
+    """Parse a stored manual-baseline metadata value. Fail-closed: anything
+    other than a well-formed schema-2 record (unknown schema versions
+    included) returns None and the patient is treated as having no
+    provider-entered baseline."""
+    try:
+        data = json.loads(value)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    if data.get("schema") != MANUAL_BASELINE_SCHEMA_VERSION:
+        return None
+    if data.get("agent") not in MANUAL_AGENT_OPTIONS:
+        return None
+    try:
+        weight_lb = float(data.get("weight_lb"))
+        baseline_date = datetime.fromisoformat(str(data.get("baseline_date")))
+    except (TypeError, ValueError):
+        return None
+    if weight_lb <= 0:
+        return None
+    return {
+        "weight_lb": weight_lb,
+        "baseline_date": baseline_date,
+        "agent": data.get("agent"),
+        "set_by_staff_id": data.get("set_by_staff_id"),
+        "set_at_utc": data.get("set_at_utc"),
+        "note_id": data.get("note_id"),
+        "revision": int(data.get("revision") or 0),
+        "superseded_note_id": data.get("superseded_note_id"),
+    }
+
+
+def resolve_render_mode(manual_baseline: dict | None, obs_raw: list) -> str:
+    """Decision 3C render gate: "manual" | "legacy" | "empty".
+
+    A provider-entered baseline always wins. Otherwise, patients whose
+    earliest weight observation RECORD predates MANUAL_BASELINE_CUTOVER keep
+    the legacy visit-1-baseline rendering byte-identically; everyone else
+    (no observations, or all records created post-cutover) gets the empty
+    state until a provider enters the baseline.
+    """
+    if manual_baseline:
+        return "manual"
+    created_times = [
+        _strip_tz(obs.get("created"))
+        for obs in obs_raw or []
+        if isinstance(obs, dict) and obs.get("created") is not None
+    ]
+    if created_times and min(created_times) < _strip_tz(MANUAL_BASELINE_CUTOVER):
+        return "legacy"
+    return "empty"
+
+
+def build_discrepancy_notice(detected_agent_key: str | None, selected: str) -> str | None:
+    """Decision 5: non-blocking notice when the active medication list
+    contradicts the provider's dropdown selection. None = no contradiction
+    evidence (no/ambiguous active GLP-1, or agreement)."""
+    if detected_agent_key is None or selected not in MANUAL_AGENT_OPTIONS:
+        return None
+    if MANUAL_AGENT_OPTIONS[selected] == detected_agent_key:
+        return None
+    detected_name = detected_agent_key.split("_", 1)[0].capitalize()
+    if MANUAL_AGENT_OPTIONS[selected] is None:
+        return (
+            f"Active medication list shows {detected_name} — no projection "
+            f"shown for provider-selected {MANUAL_AGENT_LABELS['other']}."
+        )
+    return (
+        f"Active medication list shows {detected_name} — projection shown "
+        f"for provider-selected {MANUAL_AGENT_LABELS[selected]}."
+    )
+
+
+def build_correction_header(
+    *, old_weight_lb: float, old_date_label: str, new_weight_lb: float,
+    new_date_label: str, staff_display: str, timestamp: str, reason: str,
+) -> str:
+    """Amendment 3 correction header — exact template, pinned verbatim."""
+    return CORRECTION_HEADER_TEMPLATE.format(
+        old_weight=f"{old_weight_lb:.1f}",
+        old_date=old_date_label,
+        new_weight=f"{new_weight_lb:.1f}",
+        new_date=new_date_label,
+        staff=staff_display,
+        timestamp=timestamp,
+        reason=reason,
+    )
+
+
+def build_note_narrative(
+    *, weight_lb: float, baseline_date_label: str, agent_label: str,
+    provider_text: str, minutes: int | None, correction_header: str | None = None,
+) -> str:
+    """Amendment 2 billing-supportive narrative. The time line is populated
+    only from the provider-entered minutes field — never fabricated; the
+    blank stays blank when minutes were not entered."""
+    lines: list[str] = []
+    if correction_header:
+        lines.append(correction_header)
+        lines.append("")
+    lines.append("Weight-management counseling — provider-confirmed baseline.")
+    lines.append(f"Baseline weight: {weight_lb:.1f} lb (as of {baseline_date_label}).")
+    lines.append(f"Medication: {agent_label}.")
+    lines.append(f"Counseling: {provider_text}")
+    lines.append(
+        f"Time spent: {minutes} minutes" if minutes else "Time spent: ___ minutes"
+    )
+    return "\n".join(lines)
+
+
+def build_manual_baseline_value(
+    *, weight_lb: float, baseline_date_iso: str, agent: str, staff_id,
+    note_id, revision: int, superseded_note_id=None,
+) -> str:
+    """Serialize the schema-2 metadata value. baseline_date is the CLINICAL
+    anchor; set_at_utc is the entry timestamp — distinct, never conflated."""
+    return json.dumps({
+        "schema": MANUAL_BASELINE_SCHEMA_VERSION,
+        "weight_lb": weight_lb,
+        "baseline_date": baseline_date_iso,
+        "agent": agent,
+        "set_by_staff_id": staff_id,
+        "set_at_utc": _now_iso(),
+        "note_id": note_id,
+        "revision": revision,
+        "superseded_note_id": superseded_note_id,
+    })
+
+
+def validate_baseline_form(form: dict, *, is_correction: bool) -> tuple[list[str], bool]:
+    """Validate the manual-baseline dialog POST. Returns (errors,
+    needs_bounds_confirm).
+
+    Hard rejects: non-numeric/non-positive weight, bad/future/ancient
+    baseline date, unknown agent, empty note text, bad minutes, missing
+    correction reason. Soft (Amendment 4): weight outside
+    ADULT_WEIGHT_PLAUSIBILITY_LB needs confirm-to-override — this is the ONLY
+    code path wired to that constant (scope guard)."""
+    errors: list[str] = []
+    needs_confirm = False
+
+    try:
+        weight_lb = float(form.get("weight_lb"))
+    except (TypeError, ValueError):
+        weight_lb = 0.0
+    if weight_lb <= 0:
+        errors.append("Baseline weight must be a positive number (lb)")
+    else:
+        low, high = ADULT_WEIGHT_PLAUSIBILITY_LB
+        if not (low <= weight_lb <= high) and not form.get("confirm_bounds"):
+            needs_confirm = True
+
+    baseline_date_raw = str(form.get("baseline_date") or "")
+    try:
+        baseline_date = datetime.fromisoformat(baseline_date_raw)
+    except ValueError:
+        baseline_date = None
+    if baseline_date is None:
+        errors.append("Baseline date is required (YYYY-MM-DD)")
+    elif _strip_tz(baseline_date).date() > date.today():
+        errors.append("Baseline date cannot be in the future")
+    elif baseline_date.year < 1900:
+        errors.append("Baseline date is implausibly old")
+
+    if form.get("agent") not in MANUAL_AGENT_OPTIONS:
+        errors.append("Select which medication the patient is starting")
+
+    note_text = str(form.get("note_text") or "").strip()
+    if not note_text:
+        errors.append("An accompanying note is required")
+    elif len(note_text) > 10000:
+        errors.append("Note text is too long (10,000 character limit)")
+
+    minutes_raw = form.get("minutes")
+    if minutes_raw not in (None, ""):
+        try:
+            minutes = int(minutes_raw)
+        except (TypeError, ValueError):
+            minutes = -1
+        if not (1 <= minutes <= 600):
+            errors.append("Time spent must be a whole number of minutes (1–600)")
+
+    if is_correction and not str(form.get("reason") or "").strip():
+        errors.append("A reason is required when revising an existing baseline")
+
+    return errors, needs_confirm
+
+
 def assemble_template_context(
     patient: dict,
     baseline: dict,
@@ -1355,12 +1966,17 @@ def assemble_template_context(
     expected_band: dict | None = None,
     velocity_stats: dict | None = None,
     flags: list[dict] | None = None,
+    mode: str = "legacy",
+    manual_baseline: dict | None = None,
+    discrepancy_notice: str | None = None,
 ) -> dict:
     """Assemble the final context for render_to_string().
 
     Each top-level component dict carries `_component` and `_loaded_at`.
     The v0.2 arguments are keyword-optional so v0.1 call sites (and the
     byte-untouched v0.1 tests) keep working; defaults are valid empty states.
+    v0.5.0 adds mode / manual_baseline / discrepancy_notice the same way —
+    defaults keep every legacy call site byte-identical.
     """
     now = _now_iso()
 
@@ -1426,6 +2042,10 @@ def assemble_template_context(
         "expected_band": {**expected_band, "_component": "expected_band_layer", "_loaded_at": now},
         "velocity_stats": velocity_stats,
         "flags": flags,
+        # v0.5.0 manual-baseline surface (defaults: legacy mode, no notice).
+        "mode": mode,
+        "manual_baseline": manual_baseline,
+        "discrepancy_notice": discrepancy_notice,
         "export_summary": build_export_summary(
             patient=patient,
             baseline=baseline,
@@ -1435,6 +2055,9 @@ def assemble_template_context(
             velocity_stats=velocity_stats,
             flags=flags,
             display_unit=DISPLAY_UNIT,
+            baseline_date_label_override=(
+                (manual_baseline or {}).get("baseline_date_label") if mode == "manual" else None
+            ),
         ),
         # v0.4.0 support-report scaffold: schema + Python pipeline entries,
         # pre-classified. The browser fills generated_at/user_agent and
@@ -1506,22 +2129,73 @@ class GenerateVitalsGraphs(ActionButton):
         return self.handle()
 
     def handle(self) -> list[Effect]:
-        # 1. Load
+        # 1. Load + render-gate (v0.5.0 decision 3C)
         patient_id = self._patient_id()
         patient = load_patient_demographics(patient_id)
+        manual = load_manual_baseline(patient_id)
         obs_raw = load_weight_observations_raw(patient_id)
+        mode = resolve_render_mode(manual, obs_raw)
+
+        if mode == "empty":
+            return self._render_empty_state(patient_id)
+
         note_ids = [o["canvas_note_id"] for o in obs_raw if o.get("canvas_note_id")]
         notes = batch_load_notes(note_ids)
-        agent = detect_glp1_agent(patient_id)
 
-        # 2. Process — no usable observations is an expected, recoverable condition
-        try:
-            payload = build_chart_data(obs_raw, notes, agent=agent)
-        except ValueError as exc:
-            return self._render_error([str(exc)])
+        manual_display = None
+        discrepancy = None
+        if mode == "manual":
+            # Band from the provider's dropdown selection (decision 5);
+            # week-0 / %TBWL anchor to the CLINICAL baseline_date (Amendment 1).
+            band_agent = MANUAL_AGENT_OPTIONS.get(manual["agent"])
+            baseline_override = {
+                "date": manual["baseline_date"],
+                "value_lbs": manual["weight_lb"],
+                "source_id": "provider-entered",
+            }
+            weeks_now = max(
+                0.0,
+                calculate_weeks_since_baseline(manual["baseline_date"], datetime.now()),
+            )
+            try:
+                payload = build_chart_data(
+                    obs_raw,
+                    notes,
+                    agent=band_agent,
+                    baseline_override=baseline_override,
+                    band_weeks_override=max(16.0, weeks_now),
+                )
+            except ValueError as exc:
+                return self._render_error([str(exc)])
+
+            discrepancy = build_discrepancy_notice(
+                detect_glp1_agent_raw(patient_id), manual["agent"]
+            )
+            if discrepancy:
+                payload["_pipeline_timestamps"]["agent_discrepancy_detected"] = _now_iso()
+                log.info(
+                    "Agent discrepancy for patient %s: %s", patient_id, discrepancy
+                )
+            manual_display = {
+                "weight_lb": manual["weight_lb"],
+                "baseline_date_label": manual["baseline_date"].date().isoformat(),
+                "agent": manual["agent"],
+                "agent_label": MANUAL_AGENT_LABELS.get(manual["agent"], manual["agent"]),
+                "revision": manual["revision"],
+            }
+            is_valid, errors = validate_chart_payload(
+                payload, allow_empty_datapoints=True
+            )
+        else:
+            # Legacy mode — byte-identical to the pre-v0.5.0 flow.
+            agent = detect_glp1_agent(patient_id)
+            try:
+                payload = build_chart_data(obs_raw, notes, agent=agent)
+            except ValueError as exc:
+                return self._render_error([str(exc)])
+            is_valid, errors = validate_chart_payload(payload)
 
         # 3. Validate — BEFORE any LaunchModalEffect
-        is_valid, errors = validate_chart_payload(payload)
         if not is_valid:
             return self._render_error(errors)
 
@@ -1535,16 +2209,49 @@ class GenerateVitalsGraphs(ActionButton):
             expected_band=payload.get("expected_band"),
             velocity_stats=payload.get("velocity_stats"),
             flags=payload.get("flags"),
+            mode=mode,
+            manual_baseline=manual_display,
+            discrepancy_notice=discrepancy,
         )
 
-        # 5. Render — serialize the whole context for the template's JSON.parse()
+        # 5. Render — serialize the whole context for the template's JSON.parse().
+        # The baseline dialog ships ONLY in manual mode (structural absence for
+        # legacy patients — no Set-baseline button can exist in their document).
+        dialog_html = BASELINE_DIALOG_HTML if mode == "manual" else ""
         chart_data_json = json.dumps(context, default=_json_default)
         rendered_html = render_to_string(
-            "templates/chart.html", {"chart_data_json": chart_data_json}
+            "templates/chart.html",
+            {"chart_data_json": chart_data_json, "baseline_dialog_html": dialog_html},
         )
         return [
             LaunchModalEffect(
                 content=rendered_html,
+                target=LAUNCH_TARGET,
+                title="Weight Trajectory",
+            ).apply()
+        ]
+
+    def _render_empty_state(self, patient_id: str) -> list[Effect]:
+        """v0.5.0: no provider-confirmed baseline → a friendly empty state
+        that asks for one. Structurally separate document (L2, assembled
+        inline like the error doc — no chart, no export, no event-log panel
+        ships to these patients; only the baseline dialog does)."""
+        ctx_json = json.dumps(
+            {"mode": "empty", "patient_id": patient_id, "current": None},
+            default=_json_default,
+        ).replace("</", "<\\/")
+        empty_html = (
+            "<div style=\"font-family: Lato, Arial, sans-serif; padding: 24px;\">"
+            "<h2 style=\"margin-top:0;\">Weight Trajectory</h2>"
+            f"<p style=\"color:#44505c;\">{html.escape(EMPTY_STATE_MESSAGE)}</p>"
+            "<span id=\"cm-baseline-btn-slot\"></span>"
+            "</div>"
+            f"<script>window.CM_BASELINE_CTX = {ctx_json};</script>"
+            f"{BASELINE_DIALOG_HTML}"
+        )
+        return [
+            LaunchModalEffect(
+                content=empty_html,
                 target=LAUNCH_TARGET,
                 title="Weight Trajectory",
             ).apply()
@@ -1573,4 +2280,164 @@ class GenerateVitalsGraphs(ActionButton):
                 target=LAUNCH_TARGET,
                 title="Weight Trajectory",
             ).apply()
+        ]
+
+
+# ─────────────────────────────────────────────────────────────
+# SECTION 6: Manual-Baseline API (v0.5.0)
+# ─────────────────────────────────────────────────────────────
+
+
+class ManualBaselineAPI(StaffSessionAuthMixin, SimpleAPI):
+    """POST /plugin-io/api/cardiometabolic_tracker/baseline
+
+    Saves the provider-entered baseline (decision 1b): one PatientMetadata
+    upsert (machine-readable source of truth: weight + clinical date +
+    selected agent together) plus one visit note with a PlanCommand narrative
+    (the clinical/insurance documentation), created in the same effect batch
+    via a user-set note UUID (decision 2, verified docs pattern).
+
+    Staff session auth only (StaffSessionAuthMixin); the staff id comes from
+    the Canvas-set canvas-logged-in-user-id header — never client input.
+    Fail-closed everywhere: validation errors, missing note type, or missing
+    practice location return 4xx/5xx with ZERO partial effects.
+    """
+
+    @api.post("/baseline")
+    def save_baseline(self) -> list:
+        try:
+            body = self.request.json()
+        except (ValueError, TypeError):
+            return [JSONResponse({"status": "error", "errors": ["Invalid JSON body"]}, status_code=400)]
+        if not isinstance(body, dict):
+            return [JSONResponse({"status": "error", "errors": ["Invalid JSON body"]}, status_code=400)]
+
+        patient_id = str(body.get("patient_id") or "")
+        if not patient_id or not Patient.objects.filter(id=patient_id).exists():
+            return [JSONResponse({"status": "error", "errors": ["Unknown patient"]}, status_code=400)]
+
+        staff_id = self.request.headers.get("canvas-logged-in-user-id")
+        if not staff_id:
+            return [JSONResponse({"status": "error", "errors": ["No authenticated staff session"]}, status_code=401)]
+
+        # Correction mode iff a parseable manual baseline already exists (A3).
+        existing = load_manual_baseline(patient_id)
+        is_correction = existing is not None
+
+        errors, needs_confirm = validate_baseline_form(body, is_correction=is_correction)
+        if errors:
+            return [JSONResponse({"status": "error", "errors": errors}, status_code=400)]
+        if needs_confirm:
+            # Soft plausibility bounds (Amendment 4): confirm-to-override.
+            return [JSONResponse(
+                {"status": "confirm_required", "message": BOUNDS_CONFIRM_MESSAGE},
+                status_code=200,
+            )]
+
+        weight_lb = float(body["weight_lb"])
+        baseline_date = datetime.fromisoformat(str(body["baseline_date"]))
+        baseline_date_label = baseline_date.date().isoformat()
+        agent = str(body["agent"])
+        minutes_raw = body.get("minutes")
+        minutes = int(minutes_raw) if minutes_raw not in (None, "") else None
+        provider_text = str(body.get("note_text") or "").strip()
+
+        note_type, used_review_fallback = select_counseling_note_type()
+        if note_type is None:
+            return [JSONResponse(
+                {"status": "error", "errors": ["No usable note type configured on this instance"]},
+                status_code=500,
+            )]
+        practice_location = PracticeLocation.objects.order_by("dbid").first()
+        if practice_location is None:
+            return [JSONResponse(
+                {"status": "error", "errors": ["No practice location configured on this instance"]},
+                status_code=500,
+            )]
+
+        correction_header = None
+        revision = 1
+        superseded_note_id = None
+        if is_correction:
+            revision = int(existing["revision"]) + 1
+            superseded_note_id = existing.get("note_id")
+            correction_header = build_correction_header(
+                old_weight_lb=existing["weight_lb"],
+                old_date_label=existing["baseline_date"].date().isoformat(),
+                new_weight_lb=weight_lb,
+                new_date_label=baseline_date_label,
+                staff_display=staff_display_name(staff_id),
+                timestamp=_now_iso(),
+                reason=str(body.get("reason") or "").strip(),
+            )
+
+        narrative = build_note_narrative(
+            weight_lb=weight_lb,
+            baseline_date_label=baseline_date_label,
+            agent_label=MANUAL_AGENT_LABELS[agent],
+            provider_text=provider_text,
+            minutes=minutes,
+            correction_header=correction_header,
+        )
+
+        # Note + command chained via a user-set UUID (decision 2).
+        note_uuid = uuid4()
+        note_effect = NoteEffect(
+            instance_id=note_uuid,
+            note_type_id=str(note_type.id),
+            datetime_of_service=datetime.now(timezone.utc),
+            patient_id=patient_id,
+            practice_location_id=str(practice_location.id),
+            provider_id=str(staff_id),
+            title=MANUAL_NOTE_TITLE,
+        )
+        plan_command = PlanCommand(note_uuid=str(note_uuid), narrative=narrative)
+        metadata_effect = PatientMetadataEffect(
+            patient_id=patient_id, key=MANUAL_BASELINE_METADATA_KEY
+        )
+        metadata_value = build_manual_baseline_value(
+            weight_lb=weight_lb,
+            baseline_date_iso=baseline_date_label,
+            agent=agent,
+            staff_id=staff_id,
+            note_id=str(note_uuid),
+            revision=revision,
+            superseded_note_id=superseded_note_id,
+        )
+
+        now = _now_iso()
+        events = [
+            {"name": "python.baseline_saved", "timestamp_utc": now},
+            {"name": "python.medication_selected", "timestamp_utc": now},
+            {"name": "python.note_created", "timestamp_utc": now},
+        ]
+        low, high = ADULT_WEIGHT_PLAUSIBILITY_LB
+        if body.get("confirm_bounds") and not (low <= weight_lb <= high):
+            events.append({"name": "python.baseline_bounds_override", "timestamp_utc": now})
+            log.warning(
+                "Baseline bounds override confirmed for patient %s: %.1f lb",
+                patient_id, weight_lb,
+            )
+
+        cpt_reminder = {
+            "heading": CPT_REMINDER_HEADING,
+            "body": (
+                f"{CPT_REMINDER_BODY} {CPT_REMINDER_REVIEW_ADDENDUM}"
+                if used_review_fallback else CPT_REMINDER_BODY
+            ),
+        }
+        response = JSONResponse({
+            "status": "saved",
+            "revision": revision,
+            "note_id": str(note_uuid),
+            "is_correction": is_correction,
+            "used_review_fallback": used_review_fallback,
+            "cpt_reminder": cpt_reminder,
+            "events": events,
+        })
+        return [
+            note_effect.create(),
+            plan_command.originate(),
+            metadata_effect.upsert(metadata_value),
+            response,
         ]

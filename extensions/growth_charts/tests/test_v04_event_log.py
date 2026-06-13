@@ -171,11 +171,13 @@ class TestLogExportBuilder(V04TestCase):
         self.assertEqual(set(self._export()), self.EXPECTED_KEYS)
 
     def test_schema_and_plugin_versions(self):
+        # v0.5.0: plugin_version pin made symbolic (== PLUGIN_VERSION == the
+        # manifest) — a hard-coded version literal cannot survive any bump;
+        # the per-cycle literal pin lives in each cycle's own suite.
         export = self._export()
         self.assertEqual(export["schema_version"], LOG_EXPORT_SCHEMA_VERSION)
         self.assertEqual(export["schema_version"], "1")
         self.assertEqual(export["plugin_version"], PLUGIN_VERSION)
-        self.assertEqual(export["plugin_version"], "0.4.0")
 
     def test_browser_only_fields_default_none(self):
         export = self._export()
@@ -393,12 +395,14 @@ class TestStructuralAbsence(V04TestCase):
 
 
 class TestVersionPairing(V04TestCase):
-    def test_version_is_0_4_0_everywhere(self):
+    def test_version_pairing_manifest_matches_code(self):
+        # v0.5.0: made symbolic (was a hard "0.4.0" pin) — manifest↔code
+        # pairing is the invariant; the current literal is pinned by the
+        # newest cycle's suite.
         manifest = json.loads(
             (REPO_ROOT / "CANVAS_MANIFEST.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(PLUGIN_VERSION, "0.4.0")
-        self.assertEqual(manifest["plugin_version"], "0.4.0")
+        self.assertEqual(manifest["plugin_version"], PLUGIN_VERSION)
 
 
 if __name__ == "__main__":
