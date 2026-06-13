@@ -10,8 +10,17 @@
                 "description": "Renders an adult cardiometabolic weight trajectory chart from the patient's weight observations.",
                 "data_access": {
                     "event": "",
-                    "read": ["Patient", "Observation", "Note", "Medication"],
+                    "read": ["Patient", "Observation", "Note", "Medication", "PatientMetadata"],
                     "write": []
+                }
+            },
+            {
+                "class": "cardiometabolic_tracker.protocols.growth_charts:ManualBaselineAPI",
+                "description": "Staff-session API that saves a provider-entered baseline weight + medication selection (PatientMetadata) and creates the accompanying counseling note (Note + Plan command).",
+                "data_access": {
+                    "event": "",
+                    "read": ["Patient", "PatientMetadata", "NoteType", "PracticeLocation", "Staff", "Medication"],
+                    "write": ["PatientMetadata", "Note", "Command"]
                 }
             }
         ],

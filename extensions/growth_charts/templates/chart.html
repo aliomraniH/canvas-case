@@ -124,6 +124,17 @@
     border-radius: 0 4px 4px 0;
   }
 
+  /* Manual-baseline discrepancy notice (v0.5.0, decision 5): non-blocking */
+  .cm-discrepancy {
+    margin-top: 8px;
+    padding: 6px 10px;
+    font-size: 12px;
+    color: #8a5a00;
+    background: #fdf1d7;
+    border-left: 3px solid #ecc55f;
+    border-radius: 0 4px 4px 0;
+  }
+
   /* Degraded-state note (v0.2 E4) */
   .cm-data-note {
     margin-top: 8px;
@@ -180,7 +191,8 @@
        replaces the on-screen stats bar and legend (no duplication); tooltips
        and hover-only content are suppressed outright. */
     #cm-export-btn, .cm-hint, #cm-statsbar, #cm-legend, #cm-band-info,
-    #cm-data-note, #cm-diagnostics { display: none !important; }
+    #cm-data-note, #cm-diagnostics, #cm-baseline-info, #cm-discrepancy,
+    #cm-baseline-btn-slot, #cm-bl-overlay { display: none !important; }
     .cm-layer-tooltip { display: none !important; }
     .cm-container { max-width: 100%; margin: 0; padding: 0; }
     .cm-chart-card { border: none; padding: 4px 0; }
@@ -251,6 +263,7 @@
     <div class="cm-title">Weight Trajectory</div>
     <div class="cm-header-right">
       <span class="cm-subtitle">% total body weight loss (TBWL) vs. baseline</span>
+      <span id="cm-baseline-btn-slot"></span>
       <button id="cm-export-btn" class="cm-export-btn" type="button"
               title="Print or save this summary as a PDF">Export</button>
     </div>
@@ -267,6 +280,8 @@
               title="About this reference band">&#9432;</button>
     </div>
     <div id="cm-band-info" class="cm-band-info" hidden></div>
+    <div id="cm-baseline-info" class="cm-data-note" style="display:none;"></div>
+    <div id="cm-discrepancy" class="cm-discrepancy" style="display:none;"></div>
     <div id="cm-data-note" class="cm-data-note" style="display:none;"></div>
     <div class="cm-hint">Hover a point for details. Press <strong>Shift+D</strong> for technical log.</div>
   </div>
@@ -604,12 +619,17 @@ const ChartScaffold = {
     const baseline = BaselineLayer._data ? +BaselineLayer._data.value_lbs : null;
     if (baseline != null) weights.push(baseline);
 
-    // The expected band participates in the y-domain (it is plotted data);
+    // The expected band participates in BOTH domains (it is plotted data);
     // milestone lines deliberately do NOT (suppression rule, server-mirrored).
+    // x participation matters in manual-baseline mode (v0.5.0): a provider-
+    // confirmed baseline can exist before any follow-up weight, so the band
+    // may be the only dated series on the chart.
     const bandPoints = (ExpectedBandLayer._data && ExpectedBandLayer._data.points) || [];
     bandPoints.forEach(p => {
       if (p.lower_lbs != null) weights.push(+p.lower_lbs);
       if (p.upper_lbs != null) weights.push(+p.upper_lbs);
+      const bd = cmParseDate(p.date);
+      if (bd) dates.push(bd);
     });
 
     if (dates.length) {
@@ -1236,6 +1256,33 @@ document.addEventListener('DOMContentLoaded', () => {
   // appends its own runtime entries on top.
   DiagnosticsPanel.init(chartData.log_export_base, chartData.table_rows);
 
+  // Manual-baseline context for the dialog script (v0.5.0). The dialog ships
+  // (and its listener registers) AFTER this script, so the value is set
+  // before the dialog reads it. In legacy mode no dialog ships at all —
+  // the Set-baseline button cannot exist in a legacy document.
+  window.CM_BASELINE_CTX = {
+    mode: chartData.mode || 'legacy',
+    patient_id: (chartData.patient || {}).patient_id || null,
+    current: chartData.manual_baseline || null,
+  };
+  if (chartData.mode === 'manual' && chartData.manual_baseline) {
+    const info = document.getElementById('cm-baseline-info');
+    if (info) {
+      const mb = chartData.manual_baseline;
+      info.textContent = `Provider-confirmed baseline: ${(+mb.weight_lb).toFixed(1)} lb`
+        + ` as of ${mb.baseline_date_label}`
+        + (mb.revision > 1 ? ` (revision ${mb.revision})` : '');
+      info.style.display = 'block';
+    }
+  }
+  if (chartData.discrepancy_notice) {
+    const banner = document.getElementById('cm-discrepancy');
+    if (banner) {
+      banner.textContent = chartData.discrepancy_notice;
+      banner.style.display = 'block';
+    }
+  }
+
   StatsBar.render(chartData);
   ChartScaffold.init(chartData.chart_config);
 
@@ -1305,3 +1352,4 @@ window.refreshAll = function () {
    MilestoneLayer, DataPointLayer, AnnotationLayer].forEach(c => c.refresh());
 };
 </script>
+{{ baseline_dialog_html|safe }}
