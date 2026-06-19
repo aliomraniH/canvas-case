@@ -1,0 +1,56 @@
+{
+  "$comment": "Local-first multi-agent wiring for the GLP-1 plugin. Hooks enforce the local-first/safety behavior deterministically (not by prompt). Set AGENT_ID, MEMORY_SERVER_URL, and MCP_AUTH_TOKEN per agent shell.",
+  "permissions": {
+    "allow": [
+      "Read",
+      "Grep",
+      "Glob",
+      "Bash(git diff:*)",
+      "Bash(git status:*)",
+      "Bash(pytest:*)"
+    ],
+    "deny": [
+      "Bash(canvas install:*)",
+      "WebFetch"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session_start_load.sh" }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|Bash|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/pretooluse_guards.sh" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/post_tooluse_log.sh" }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session_end_reconcile.sh" }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session_end_reconcile.sh" }
+        ]
+      }
+    ]
+  }
+}
