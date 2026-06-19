@@ -1,0 +1,22 @@
+# Replit configuration — deploy as a Reserved VM (persistent), NOT Autoscale.
+# Autoscale is ephemeral and would defeat the Phase 0 durability gate.
+
+entrypoint = "app.py"
+modules = ["python-3.11"]
+
+run = ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}"]
+
+[nix]
+channel = "stable-24_05"
+
+[env]
+PYTHONUNBUFFERED = "1"
+
+[deployment]
+deploymentTarget = "vm"
+build = ["sh", "-c", "pip install -e ."]
+run = ["sh", "-c", "python scripts/migrate.py && uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}"]
+
+[[ports]]
+localPort = 8000
+externalPort = 80

@@ -178,3 +178,6 @@ cython_debug/
 # Debug-capture session state (local tooling artifacts)
 .workspace_state/
 **/.workspace_state/
+
+# per-agent local SQLite mirrors (local-first cache)
+.agent-cache/
