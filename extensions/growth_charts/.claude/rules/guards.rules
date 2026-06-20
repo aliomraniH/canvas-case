@@ -1,0 +1,60 @@
+{
+  "$comment": "TIER 3 — Canvas guard RULE CONTENTS (data, not code). The generic guard_engine.py reads this; all Canvas-specific strings (Observation, canvas_sdk.v1.data, ZZTEST, import names, dev hosts) live HERE, never in the engine. Another project ships its own guards.rules.",
+  "version": 1,
+  "rules": [
+    {
+      "id": "fhir-immutable",
+      "type": "match",
+      "when": {
+        "all": [
+          { "field": "*", "matches": "Observation" },
+          { "field": "*", "matches": "\\b(PATCH|DELETE)\\b" }
+        ]
+      },
+      "reason": "FHIR Observations are immutable (Create/Read/Search only).",
+      "allowed": "create a new Observation, or mark the prior one entered_in_error."
+    },
+    {
+      "id": "readonly-data",
+      "type": "match",
+      "when": {
+        "all": [
+          { "field": "*", "matches": "canvas_sdk\\.v1\\.data" },
+          { "field": "*", "matches": "\\.(save|create|update|delete)\\(" }
+        ]
+      },
+      "reason": "canvas_sdk.v1.data models are read-only.",
+      "allowed": "return a typed Effect from compute() instead of writing directly."
+    },
+    {
+      "id": "sandbox-imports",
+      "type": "import_allowlist",
+      "tools": ["Write", "Edit", "MultiEdit"],
+      "allow": [
+        "canvas_sdk", "__future__", "datetime", "json", "math", "re", "typing",
+        "decimal", "collections", "enum", "dataclasses", "functools", "itertools", "uuid"
+      ],
+      "deny": ["requests", "httpx", "subprocess", "socket", "pickle", "ctypes", "os.system"],
+      "reason": "import is not on the RestrictedPython sandbox allow-list.",
+      "allowed": "use canvas_sdk.utils.http.Http; no raw network/process/serialization libs."
+    },
+    {
+      "id": "zztest-only",
+      "type": "patient_write_scope",
+      "entity_matches": "\\b(patient_id|mrn|first_name|last_name)\\b",
+      "write_matches": "\\b(create|POST|write|save|originate)\\b",
+      "require": "ZZTEST",
+      "reason": "Live writes may target ZZTEST-* test patients only.",
+      "allowed": "use a ZZTEST-* patient; existing patients are read-only fixtures."
+    },
+    {
+      "id": "dev-host-only",
+      "type": "command_host_allowlist",
+      "tools": ["Bash"],
+      "command_matches": "canvas\\s+install",
+      "host_allow": "(dev|uat|sandbox|localhost|127\\.0\\.0\\.1)",
+      "reason": "canvas install may target the DEV/UAT host only.",
+      "allowed": "pass a dev/uat/sandbox host; production deploys require human sign-off."
+    }
+  ]
+}

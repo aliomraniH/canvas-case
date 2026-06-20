@@ -12,8 +12,12 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import urllib.error
 import urllib.request
+
+sys.path.insert(0, os.path.dirname(__file__))
+import config as _config  # noqa: E402
 
 SERVER_URL = os.environ.get("MEMORY_SERVER_URL", "").rstrip("/")
 AUTH_TOKEN = os.environ.get("MCP_AUTH_TOKEN", "")
@@ -79,8 +83,11 @@ def push_event(event: dict) -> bool:
         })
     if op == "intent":
         # Code-change intent recorded for the board; stored as a memory todo.
+        # Namespace/scope come from the Tier-3 pack, never hardcoded here.
+        cfg = _config.load()
         return _mcp_call("memory_save", {
-            "namespace": "intents", "key": eid,
+            "namespace": cfg.memory_namespace,
+            "key": cfg.scoped_key("intent", eid),
             "value": {"files": event["files"], "diff_summary": event["diff_summary"],
                       "lamport": event["lamport"]},
             "kind": "todo", "source_surface": event["agent_id"], "event_id": eid,

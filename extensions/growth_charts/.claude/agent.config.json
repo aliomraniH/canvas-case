@@ -1,0 +1,22 @@
+{
+  "$comment": "TIER 3 — Canvas project pack. The ONLY place the project namespace lives. Swap this + CLAUDE.md + rules/guards.rules + .mcp.json to reuse the Tier-2 machinery in another project. lib/config.py is the sole reader; the literal project name must not appear under lib/, hooks/, or agents/.",
+  "project": "canvas-glp1",
+  "claude_md": "../../../CLAUDE.md",
+  "guards_rules": "rules/guards.rules",
+  "memory_namespace": "canvas-glp1",
+  "key_scopes": {
+    "coord": "coord/",
+    "knowledge": "knowledge/",
+    "session": "session/",
+    "intent": "coord/intents/"
+  },
+  "test_project": "proj-test",
+  "sdk_validation_mcp": "sdk-tools",
+  "env": {
+    "memory_server_url": "MEMORY_SERVER_URL",
+    "memory_token": "MCP_AUTH_TOKEN",
+    "canvas_mcp_url": "CANVAS_MCP_URL",
+    "canvas_mcp_token": "CANVAS_MCP_TOKEN",
+    "agent_id": "AGENT_ID"
+  }
+}
