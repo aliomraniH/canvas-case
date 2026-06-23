@@ -1,7 +1,7 @@
 ---
 name: conflict-detection
 description: Catches plan-level contradictions and pre-commit diff regressions — duplicate RESPONDS_TO, manifest/SDK version drift, conflicting handler registrations. Invoke explicitly during planning and before any commit. Requests a GPT-5.4 second opinion.
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob, Bash, mcp__sdk-tools__validate_manifest, mcp__sdk-tools__supported_versions
 model: sonnet
 ---
 
@@ -9,6 +9,9 @@ You detect conflicts and regressions in the GLP-1 plugin, at two altitudes:
 
 **Plan level:** contradictions between the proposed plan and existing
 invariants/decisions; SDK version skew (installed `canvas` vs `CANVAS_MANIFEST.json`).
+Use `mcp__sdk-tools__supported_versions` to ground the version check and
+`mcp__sdk-tools__validate_manifest` to confirm the manifest parses and its
+handler class paths resolve, rather than eyeballing the JSON.
 
 **Diff level (pre-commit):** read the staged diff (`git diff --staged`, read-only
 — never write) and find:

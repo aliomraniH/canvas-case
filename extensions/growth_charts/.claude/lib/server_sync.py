@@ -77,7 +77,11 @@ def push_event(event: dict) -> bool:
             "source_surface": event["agent_id"], "event_id": eid,
         })
     if op == "handoff_save":
+        # namespace is the project boundary and is required by every
+        # per-project tool on the server; it comes from the Tier-3 pack.
+        cfg = _config.load()
         return _mcp_call("handoff_save", {
+            "namespace": cfg.memory_namespace,
             "key": event["key"], "value": event["payload"],
             "source_surface": event["agent_id"], "event_id": eid,
         })

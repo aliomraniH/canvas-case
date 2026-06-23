@@ -1,0 +1,4 @@
+# Local secrets and per-agent caches — never commit.
+# Tokens are pasted in at startup (see DEPLOY.md) and kept here, gitignored.
+.env
+.agent-cache/
