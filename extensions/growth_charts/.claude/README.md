@@ -46,9 +46,10 @@ strings** and can be reused as-is for another project:
     `Observation`, `canvas_sdk.v1.data`, the import allow-list, `ZZTEST`, dev
     hosts — lives here, never in `lib/`).
   - `.mcp.json` — the MCP servers, URLs/tokens via env. Two independent Replit
-    deployments: **assist-memory** (`mcp-assist-memory`, the memory/coordination
-    server the hooks sync to) and **sdk-tools** (`canvas-sdk-tools`, the static
-    Canvas validator the audit agents call). Each has its own URL + bearer token.
+    deployments: **`Memory_Assist`** (`mcp-assist-memory`, the memory/coordination
+    server the hooks sync to) and **`canvas-sdk-tools`** (the static Canvas
+    validator the audit agents call). Each has its own URL + bearer token. The
+    server keys are the `mcp__<key>__<tool>` prefixes the agents reference.
 
   Supported rule types in `guards.rules`: `match` (regex over fields),
   `import_allowlist`, `patient_write_scope`, `command_host_allowlist`.
