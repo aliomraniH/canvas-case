@@ -14,10 +14,11 @@ code before reasoning by eye — they are AST/schema-based and authoritative:
 `fhir_immutability` (`code_or_diff=...`, PATCH/PUT/DELETE on FHIR),
 `sandbox_imports` (`code=...`, RestrictedPython compile), `field_names`
 (`code=...`, the traps below), and `manifest` (`manifest_json=<parsed object>`)
-on `CANVAS_MANIFEST.json`. Omit `sdk_version` (the validator only vendors
-`0.169.x`; the plugin pins `0.163.1`, which it rejects). Use grep to gather the
-`file:line` evidence the tools point at; do not contradict a tool verdict without
-citing why.
+on `CANVAS_MANIFEST.json`. Pass `sdk_version` from the manifest (currently
+`0.163.1`); if the server replies `unsupported_sdk_version`, emit a blocking
+finding that the validator must vendor that SDK bucket — do not fall back to the
+default version silently. Use grep to gather the `file:line` evidence the tools
+point at; do not contradict a tool verdict without citing why.
 
 Invariants to check (non-exhaustive — read `CLAUDE.md`):
 - FHIR Observations are Create/Read/Search only — **no PATCH/DELETE**.

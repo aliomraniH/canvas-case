@@ -21,12 +21,11 @@ which SDK buckets the validator vendors, then `mcp__canvas-sdk-tools__capability
 version-pinned catalog. Treat its verdict as authoritative over local grep; use
 grep only to find the `file:line` doc_ref and to cross-check when silent.
 
-VERSION SKEW (must flag): the validator currently vendors only `0.169.x`, but
-this plugin's `CANVAS_MANIFEST.json` pins `0.163.1`. Passing `sdk_version=0.163.1`
-returns `unsupported_sdk_version`, so call WITHOUT `sdk_version` (validates
-against the `0.169.x` default) and add a top-level finding that the verdict is
-against `0.169.x`, not the pinned `0.163.1` — any symbol added/removed between
-those versions is unverified until the pins are aligned.
+SDK version: pass `sdk_version` equal to `CANVAS_MANIFEST.json`'s `sdk_version`
+(currently `0.163.1`) so the verdict matches what the plugin actually targets. If
+the server replies `unsupported_sdk_version`, do NOT silently fall back to the
+default bucket — emit a blocking finding that the validator lacks that SDK bucket
+and must vendor `0.163.x`. Capability verdicts are unreliable until it does.
 
 Return ONLY a JSON array, one object per feature:
 

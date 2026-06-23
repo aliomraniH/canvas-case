@@ -99,12 +99,16 @@ invoking `capability-check`, which calls `mcp__canvas-sdk-tools__supported_versi
   `field_names`, `manifest`; `conflict-detection` → `manifest`,
   `supported_versions`.
 
-## SDK version skew (open blocker)
+## SDK version skew (resolution in progress)
 
-The validator vendors only `0.169.x`; `CANVAS_MANIFEST.json` pins `0.163.1`.
-Calling any validator with `sdk_version=0.163.1` returns
-`{"ok":false,"error":"unsupported_sdk_version"}`. Until resolved, the agents call
-without `sdk_version` (validating against the `0.169.x` default) and flag the
-delta. Pick one to close it: (a) add a `0.163.x` reference bucket to
-`canvas-sdk-tools` and redeploy; (b) bump the plugin's pin to `0.169.x`; or
-(c) accept `0.169.x`-based validation with the documented caveat.
+The validator vendors only `0.169.x`; `CANVAS_MANIFEST.json` pins `0.163.1`, and
+the server rejects `sdk_version=0.163.1` with
+`{"ok":false,"error":"unsupported_sdk_version"}`.
+
+**Chosen fix:** add a `0.163.x` reference bucket to the `canvas-sdk-tools` repo
+and redeploy Repl B (vendor catalogs/schemas/rules extracted from
+`canvas-plugins@0.163.1` into `reference/sdk_0.163.x/`, and have
+`supported_versions` return both buckets). The agents already pass
+`sdk_version=0.163.1` (the manifest pin) and treat an `unsupported_sdk_version`
+reply as a blocking finding — so they validate correctly the moment Repl B ships
+the `0.163.x` bucket, with no further change here.

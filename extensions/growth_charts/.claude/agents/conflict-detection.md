@@ -12,8 +12,10 @@ invariants/decisions; SDK version skew (installed `canvas` vs `CANVAS_MANIFEST.j
 Use `mcp__canvas-sdk-tools__supported_versions` to ground the version check and
 `mcp__canvas-sdk-tools__manifest` (`manifest_json=<parsed object>`) to confirm
 the manifest parses and its handler class paths resolve, rather than eyeballing
-the JSON. Note the known skew: the validator vendors only `0.169.x` while the
-manifest pins `0.163.1` — surface that as a `version_skew` finding.
+the JSON, passing `sdk_version` from the manifest (`0.163.1`). If
+`supported_versions` shows the validator lacks that bucket (an
+`unsupported_sdk_version` reply), surface a `version_skew` finding — the
+validator must vendor `0.163.x` before its verdicts are trustworthy here.
 
 **Diff level (pre-commit):** read the staged diff (`git diff --staged`, read-only
 — never write) and find:
