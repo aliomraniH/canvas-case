@@ -76,7 +76,7 @@ MCP server needs the same vars in the launch shell, so the file is sourced befor
 the real session:
 
 ```bash
-cd extensions/growth_charts        # .claude/ must be the project dir
+cd extensions/growth_charts        # project root: holds .mcp.json + .claude/
 claude                             # paste the four values when Claude asks; it writes .claude/.env
 # then activate the canvas-sdk-tools + Memory_Assist MCP servers for the agents:
 set -a; source .claude/.env; set +a; claude
