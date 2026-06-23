@@ -11,7 +11,7 @@
     "intent": "coord/intents/"
   },
   "test_project": "proj-test",
-  "sdk_validation_mcp": "sdk-tools",
+  "sdk_validation_mcp": "canvas-sdk-tools",
   "env": {
     "memory_server_url": "MEMORY_SERVER_URL",
     "memory_token": "MCP_AUTH_TOKEN",
