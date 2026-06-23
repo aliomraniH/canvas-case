@@ -25,10 +25,30 @@ The three safety-critical agents also request a GPT-5.4 second opinion (independ
 - `session_end_reconcile.sh` (SessionEnd/SubagentStop): replay queued intents
   idempotently (server dedupes by `event_id`), then pull others. Offline → leave
   queued, exit 0. `flock`-serialized per agent.
-- `pretooluse_guards.sh` (PreToolUse): **exit 2 blocks** FHIR Observation
-  PATCH/DELETE, writes to `canvas_sdk.v1.data`, non-allow-listed imports, non-
-  `ZZTEST-*` patient writes, and `canvas install` to a non-dev host. Repeat
-  identical attempts escalate so the agent can't blindly loop.
+- `pretooluse_guards.sh` (PreToolUse): runs the generic guard engine
+  (`lib/guard_engine.py`), which evaluates the project ruleset and **exits 2 to
+  block**. The shipped rules stop FHIR Observation PATCH/DELETE, writes to
+  `canvas_sdk.v1.data`, non-allow-listed imports, non-`ZZTEST-*` patient writes,
+  and `canvas install` to a non-dev host. Repeat identical attempts escalate so
+  the agent can't blindly loop.
+
+## Two tiers: generic machinery vs. project pack
+The setup is split so the enforcement code carries **zero Canvas-specific
+strings** and can be reused as-is for another project:
+
+- **Tier 2 — machinery** (`lib/`, `hooks/`): the guard engine, per-agent SQLite
+  cache, server-sync boundary, and session hooks. No project literals; the only
+  reader of the pack is `lib/config.py`.
+- **Tier 3 — project pack** (swap these four files to retarget):
+  - `agent.config.json` — namespace, key scopes, env var names, pointers below.
+  - `../../../CLAUDE.md` — the invariants the audit agents check against.
+  - `rules/guards.rules` — the PreToolUse rule *data* (every Canvas string —
+    `Observation`, `canvas_sdk.v1.data`, the import allow-list, `ZZTEST`, dev
+    hosts — lives here, never in `lib/`).
+  - `.mcp.json` — the MCP servers (assist-memory + canvas), URLs/tokens via env.
+
+  Supported rule types in `guards.rules`: `match` (regex over fields),
+  `import_allowlist`, `patient_write_scope`, `command_host_allowlist`.
 
 ## Per-agent environment
 Each agent shell sets:

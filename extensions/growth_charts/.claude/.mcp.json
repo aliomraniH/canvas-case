@@ -1,0 +1,20 @@
+{
+  "$comment": "TIER 3 — MCP servers for this project. Part of the swap set (agent.config.json + CLAUDE.md + rules/guards.rules + .mcp.json); another project ships its own. Streamable HTTP, bearer tokens via env — no URLs or tokens are hardcoded. The hook path (lib/server_sync.py) talks to assist-memory over raw HTTP and does not depend on this file; this registers the same servers as tools for the in-session orchestrator and the audit agents.",
+  "mcpServers": {
+    "assist-memory": {
+      "type": "http",
+      "url": "${MEMORY_SERVER_URL}/mcp/",
+      "headers": { "Authorization": "Bearer ${MCP_AUTH_TOKEN}" }
+    },
+    "canvas": {
+      "type": "http",
+      "url": "${CANVAS_MCP_URL}/mcp/",
+      "headers": { "Authorization": "Bearer ${CANVAS_MCP_TOKEN}" }
+    },
+    "sdk-tools": {
+      "type": "http",
+      "url": "${CANVAS_MCP_URL}/sdk/",
+      "headers": { "Authorization": "Bearer ${CANVAS_MCP_TOKEN}" }
+    }
+  }
+}
