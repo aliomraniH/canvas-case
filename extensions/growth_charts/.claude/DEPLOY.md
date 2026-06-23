@@ -45,31 +45,41 @@ Two Repls, two **distinct** bearer tokens. There is no live Canvas-instance MCP;
 
 ## Step 3 — what the two deployments must hand back
 
-Fill these from the Replit Agent reports; they map 1:1 onto the client env:
+Fill these from the Replit Agent reports; they map 1:1 onto the client env.
+You do **not** put tokens in this file — at startup Claude asks you for them and
+writes them to a gitignored `.claude/.env` (see Step 4). Template is
+`.env.example`:
 
 ```bash
-export MEMORY_SERVER_URL=https://<repl-a>.replit.app   # no trailing slash
-export MCP_AUTH_TOKEN=<repl-a bearer token>
-export SDK_TOOLS_URL=https://<repl-b>.replit.app        # no trailing slash
-export SDK_TOOLS_TOKEN=<repl-b bearer token>
-export AGENT_ID=orchestrator                            # or a specific subagent
+MEMORY_SERVER_URL=https://<repl-a>.replit.app   # no trailing slash
+MCP_AUTH_TOKEN=<repl-a bearer token>
+SDK_TOOLS_URL=https://<repl-b>.replit.app        # no trailing slash
+SDK_TOOLS_TOKEN=<repl-b bearer token>            # must differ from MCP_AUTH_TOKEN
+AGENT_ID=orchestrator                            # or a specific subagent
 ```
 
 `lib/server_sync.py` appends `/mcp/` and `/healthz` itself, so the URLs must be
 the bare origin with no trailing slash.
 
-## Step 4 — start Claude Code against this plugin
+## Step 4 — start Claude Code and provide the tokens
+
+Tokens are generated in the Replit dashboard and pasted into Claude at startup;
+Claude stores them in `.claude/.env` (gitignored, `chmod 600`) so they persist
+locally and never enter git. The hook path reads that file automatically
+(`lib/config.py` folds it into the environment). The in-session `sdk-tools` MCP
+server needs the same vars in the launch shell, so the file is sourced before
+the real session:
 
 ```bash
 cd extensions/growth_charts        # .claude/ must be the project dir
-# (env from Step 3 already exported in this shell)
-claude
+claude                             # paste the four values when Claude asks; it writes .claude/.env
+# then activate the sdk-tools MCP for the agents:
+set -a; source .claude/.env; set +a; claude
 ```
 
-Claude Code discovers `.claude/.mcp.json` (expanding `${SDK_TOOLS_URL}` etc.),
-applies `.claude/settings.json` (hooks + tool allowlist), and fires
-`session_start_load.sh`, which prints `ONLINE` if `MEMORY_SERVER_URL/healthz`
-answers and `STALE` otherwise (fail-open, never blocks).
+`session_start_load.sh` prints `ONLINE` if `MEMORY_SERVER_URL/healthz` answers
+and `STALE` otherwise (fail-open, never blocks). Smoke-test the wiring by
+invoking `capability-check`, which calls `mcp__sdk-tools__supported_versions`.
 
 ## Tool placement (final)
 
