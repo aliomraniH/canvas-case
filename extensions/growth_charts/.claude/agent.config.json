@@ -15,8 +15,8 @@
   "env": {
     "memory_server_url": "MEMORY_SERVER_URL",
     "memory_token": "MCP_AUTH_TOKEN",
-    "canvas_mcp_url": "CANVAS_MCP_URL",
-    "canvas_mcp_token": "CANVAS_MCP_TOKEN",
+    "sdk_tools_url": "SDK_TOOLS_URL",
+    "sdk_tools_token": "SDK_TOOLS_TOKEN",
     "agent_id": "AGENT_ID"
   }
 }

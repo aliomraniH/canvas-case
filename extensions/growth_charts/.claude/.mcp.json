@@ -1,20 +1,15 @@
 {
-  "$comment": "TIER 3 — MCP servers for this project. Part of the swap set (agent.config.json + CLAUDE.md + rules/guards.rules + .mcp.json); another project ships its own. Streamable HTTP, bearer tokens via env — no URLs or tokens are hardcoded. The hook path (lib/server_sync.py) talks to assist-memory over raw HTTP and does not depend on this file; this registers the same servers as tools for the in-session orchestrator and the audit agents.",
+  "$comment": "TIER 3 — MCP servers for this project. Part of the swap set (agent.config.json + CLAUDE.md + rules/guards.rules + .mcp.json); another project ships its own. Two independent Replit deployments, each with its OWN url + bearer token via env — nothing hardcoded. (a) assist-memory = mcp-assist-memory, the project-agnostic memory/coordination server (Postgres+pgvector); the hook path (lib/server_sync.py) talks to it over raw HTTP and does NOT depend on this file — this entry just registers the same server as tools for the in-session orchestrator. (b) sdk-tools = canvas-sdk-tools, a static/offline Canvas validator (no PHI, no live Canvas access); the audit agents call its tools by name. A live Canvas-instance MCP, if one exists, would be a third entry — add it here with its own CANVAS_MCP_URL/CANVAS_MCP_TOKEN.",
   "mcpServers": {
     "assist-memory": {
       "type": "http",
       "url": "${MEMORY_SERVER_URL}/mcp/",
       "headers": { "Authorization": "Bearer ${MCP_AUTH_TOKEN}" }
     },
-    "canvas": {
-      "type": "http",
-      "url": "${CANVAS_MCP_URL}/mcp/",
-      "headers": { "Authorization": "Bearer ${CANVAS_MCP_TOKEN}" }
-    },
     "sdk-tools": {
       "type": "http",
-      "url": "${CANVAS_MCP_URL}/sdk/",
-      "headers": { "Authorization": "Bearer ${CANVAS_MCP_TOKEN}" }
+      "url": "${SDK_TOOLS_URL}/mcp/",
+      "headers": { "Authorization": "Bearer ${SDK_TOOLS_TOKEN}" }
     }
   }
 }

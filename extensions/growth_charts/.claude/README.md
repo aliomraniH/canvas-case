@@ -45,7 +45,10 @@ strings** and can be reused as-is for another project:
   - `rules/guards.rules` — the PreToolUse rule *data* (every Canvas string —
     `Observation`, `canvas_sdk.v1.data`, the import allow-list, `ZZTEST`, dev
     hosts — lives here, never in `lib/`).
-  - `.mcp.json` — the MCP servers (assist-memory + canvas), URLs/tokens via env.
+  - `.mcp.json` — the MCP servers, URLs/tokens via env. Two independent Replit
+    deployments: **assist-memory** (`mcp-assist-memory`, the memory/coordination
+    server the hooks sync to) and **sdk-tools** (`canvas-sdk-tools`, the static
+    Canvas validator the audit agents call). Each has its own URL + bearer token.
 
   Supported rule types in `guards.rules`: `match` (regex over fields),
   `import_allowlist`, `patient_write_scope`, `command_host_allowlist`.
@@ -54,10 +57,16 @@ strings** and can be reused as-is for another project:
 Each agent shell sets:
 ```bash
 export AGENT_ID=capability-check          # one of the five (or 'orchestrator')
-export MEMORY_SERVER_URL=https://<your-replit-vm>
-export MCP_AUTH_TOKEN=<bearer token, matches the server>
+export MEMORY_SERVER_URL=https://<assist-memory-replit-vm>
+export MCP_AUTH_TOKEN=<bearer token for assist-memory>
+export SDK_TOOLS_URL=https://<canvas-sdk-tools-replit-vm>
+export SDK_TOOLS_TOKEN=<bearer token for canvas-sdk-tools>
 # optional: AGENT_CACHE_DIR (defaults to <plugin>/.agent-cache)
 ```
+`MEMORY_SERVER_URL`/`MCP_AUTH_TOKEN` are what the hooks (`lib/server_sync.py`)
+sync to; `SDK_TOOLS_URL`/`SDK_TOOLS_TOKEN` are only used by the in-session
+agents via `.mcp.json`. The two servers are separate deployments with separate
+tokens.
 `.agent-cache/<agent>.db` is a per-agent SQLite mirror (gitignored; WAL +
 `busy_timeout`). Different agents never share a DB file.
 
