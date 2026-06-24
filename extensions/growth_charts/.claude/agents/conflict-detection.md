@@ -17,6 +17,14 @@ the JSON, passing `sdk_version` from the manifest (`0.163.1`). If
 `unsupported_sdk_version` reply), surface a `version_skew` finding — the
 validator must vendor `0.163.x` before its verdicts are trustworthy here.
 
+Degraded mode (validator OFFLINE): a call that fails to return (connection
+refused, timeout, transport error) is different from an `unsupported_sdk_version`
+reply, which means the server is up. If the server is unreachable, do NOT abort —
+fall back to `git`/grep and parsing `CANVAS_MANIFEST.json` yourself, and mark each
+finding produced that way `"confidence": "degraded"`. The diff-level checks below
+already rely only on `git`/grep and are unaffected. Only a verdict the validator
+actually returned is `"confidence": "authoritative"`.
+
 **Diff level (pre-commit):** read the staged diff (`git diff --staged`, read-only
 — never write) and find:
 - duplicate or overlapping `RESPONDS_TO` event subscriptions across handlers,
@@ -30,7 +38,7 @@ Return ONLY a JSON array:
 ```json
 [{"type": "duplicate_responds_to|manifest_drift|version_skew|regression|...",
   "location": "file:line or symbol", "severity": "low|medium|high",
-  "recommendation": "the concrete fix"}]
+  "recommendation": "the concrete fix", "confidence": "authoritative|degraded"}]
 ```
 
 Provide `git`/`grep` evidence for every item. Then request a GPT-5.4 second

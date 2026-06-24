@@ -27,12 +27,22 @@ the server replies `unsupported_sdk_version`, do NOT silently fall back to the
 default bucket — emit a blocking finding that the validator lacks that SDK bucket
 and must vendor `0.163.x`. Capability verdicts are unreliable until it does.
 
+Degraded mode (validator OFFLINE): if a `canvas-sdk-tools` call fails to return
+at all — connection refused, timeout, transport error — that is different from an
+`unsupported_sdk_version` reply (which means the server IS up). When the server is
+unreachable, do NOT abort and do NOT block the work: fall back to grep/`Read` over
+the vendored `canvas_sdk/` reference, complete the gap-analysis best-effort, and
+mark every result you produced this way `"confidence": "degraded"` with a note
+that the static validator was unavailable. Only a verdict the validator actually
+returned is `"confidence": "authoritative"`.
+
 Return ONLY a JSON array, one object per feature:
 
 ```json
 [{"feature": "...", "status": "SUPPORTED|UNSUPPORTED|WORKAROUND",
   "sdk_symbol": "canvas_sdk.effects.X or null", "doc_ref": "file:line or null",
-  "notes": "if WORKAROUND, the exact alternative"}]
+  "confidence": "authoritative|degraded",
+  "notes": "if WORKAROUND, the exact alternative; if degraded, why"}]
 ```
 
 Rules:

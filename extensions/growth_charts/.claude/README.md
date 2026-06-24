@@ -17,6 +17,14 @@ Invoke explicitly by name (auto-delegation is unreliable):
 
 The three safety-critical agents also request a GPT-5.4 second opinion (independent critic).
 
+`capability-check`, `data-integrity`, and `conflict-detection` call the
+`canvas-sdk-tools` validator for authoritative verdicts, but **degrade gracefully
+when it is offline**: a call that fails to return (vs. an `unsupported_sdk_version`
+reply, which means the server is up) makes them fall back to grep/`Read` over the
+vendored `canvas_sdk/` reference and tag each finding `"confidence": "degraded"`.
+Runtime safety is unaffected either way — the PreToolUse guard hook enforces the
+hard invariants locally and depends on neither MCP.
+
 ## Hooks (`hooks/`) — what enforces local-first + safety
 - `session_start_load.sh` (SessionStart): print last-known state from cache; pull
   latest if the server is up, else a `STALE` banner. Plan from cache when offline.
