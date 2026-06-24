@@ -1751,13 +1751,15 @@ def build_table_rows(datapoints: list[dict], baseline: dict) -> list[dict]:
     baseline_lbs = float(baseline.get("value_lbs") or baseline.get("value") or 0.0)
     rows: list[dict] = []
     for dp in datapoints or []:
-        value_lbs = float(dp.get("value_lbs") or 0.0)
+        raw_value_lbs = dp.get("value_lbs")
+        has_value = raw_value_lbs is not None
+        value_lbs = float(raw_value_lbs or 0.0)
         tbwl_pct = float(dp.get("tbwl_pct") or 0.0)
         arrow = "↓" if tbwl_pct >= 0 else "↑"
         rows.append({
             "capture_iso": _capture_iso(dp.get("date_obj")),
-            "weight_display": f"{value_lbs:.1f} lb",
-            "delta_display": f"{value_lbs - baseline_lbs:+.1f} lb",
+            "weight_display": f"{value_lbs:.1f} lb" if has_value else EM_DASH,
+            "delta_display": f"{value_lbs - baseline_lbs:+.1f} lb" if has_value else EM_DASH,
             "tbwl_display": f"{arrow}{abs(tbwl_pct):.1f}%",
             "source_method": SOURCE_METHOD_NOT_RECORDED,
         })
