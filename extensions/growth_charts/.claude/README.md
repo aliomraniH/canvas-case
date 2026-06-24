@@ -45,7 +45,10 @@ strings** and can be reused as-is for another project:
   - `rules/guards.rules` — the PreToolUse rule *data* (every Canvas string —
     `Observation`, `canvas_sdk.v1.data`, the import allow-list, `ZZTEST`, dev
     hosts — lives here, never in `lib/`).
-  - `.mcp.json` — the MCP servers, URLs/tokens via env. Two independent Replit
+  - `../.mcp.json` — the MCP servers, URLs/tokens via env. Lives at the **plugin
+    root** (`extensions/growth_charts/.mcp.json`), beside `.claude/`, because
+    Claude Code reads `.mcp.json` from the project root you launch from — not
+    from inside `.claude/`. Two independent Replit
     deployments: **`Memory_Assist`** (`mcp-assist-memory`, the memory/coordination
     server the hooks sync to) and **`canvas-sdk-tools`** (the static Canvas
     validator the audit agents call). Each has its own URL + bearer token. The
