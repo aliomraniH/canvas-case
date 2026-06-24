@@ -24,6 +24,7 @@
     border: 1px solid #d4d4d4;
     border-radius: 6px;
     background: #fff;
+    position: relative;   /* anchor for the absolutely-positioned point panel */
   }
   .cm-hint { font-size: 11px; color: #99a3ad; margin-top: 6px; }
 
@@ -256,6 +257,19 @@
     background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px;
     margin: 8px 0 0; font-family: inherit;
   }
+  /* Phase 1 per-point inspection panel (read-only). */
+  .cm-point-panel {
+    position: absolute; top: 12px; right: 12px; z-index: 20;
+    min-width: 220px; max-width: 300px;
+    background: #fff; border: 1px solid #cfd8e3; border-radius: 6px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.12);
+    padding: 10px 12px; font-size: 12px; color: #1f2d3d;
+  }
+  .cm-point-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .cm-point-close { border: none; background: none; cursor: pointer; font-size: 16px; line-height: 1; color: #6b7886; }
+  .cm-point-dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0; }
+  .cm-point-dl dt { color: #6b7886; font-weight: 600; }
+  .cm-point-dl dd { margin: 0; text-align: right; }
 </style>
 
 <div id="cm-container" class="cm-container" tabindex="-1">
@@ -283,7 +297,9 @@
     <div id="cm-baseline-info" class="cm-data-note" style="display:none;"></div>
     <div id="cm-discrepancy" class="cm-discrepancy" style="display:none;"></div>
     <div id="cm-data-note" class="cm-data-note" style="display:none;"></div>
-    <div class="cm-hint">Hover a point for details. Press <strong>Shift+D</strong> for technical log.</div>
+    <div id="cm-point-panel" class="cm-point-panel" style="display:none;"
+         role="dialog" aria-label="Measurement details"></div>
+    <div class="cm-hint">Hover a point for details; <strong>double-click</strong> a point to inspect it. Press <strong>Shift+D</strong> for technical log.</div>
   </div>
   <div id="cm-print-stats" class="cm-print-only cm-print-stats"></div>
   <div id="cm-print-footer" class="cm-print-only cm-print-footer"></div>
@@ -971,7 +987,13 @@ const DataPointLayer = {
 
     inner.selectAll('circle').data(pts).join('circle')
       .attr('cx', d => CM.x(d._date)).attr('cy', d => CM.y(d._w))
-      .attr('r', 4).attr('fill', '#3b8fcf');
+      .attr('r', 4).attr('fill', '#3b8fcf')
+      // Phase 1: double-click a point opens the read-only inspection panel.
+      .style('cursor', 'pointer')
+      .on('dblclick', (event, d) => {
+        if (event && event.stopPropagation) event.stopPropagation();
+        PointInspectionPanel.show(d);
+      });
 
     // Degraded-state notes (E4): single measurement / sparse series.
     const note = document.getElementById('cm-data-note');
@@ -1254,6 +1276,109 @@ const ExportView = {
 // ───────────────────────────────────────────────────────────────
 // Initialization — order matters.
 // ───────────────────────────────────────────────────────────────
+// ───────────────────────────────────────────────────────────────
+// 8. PointInspectionPanel (Phase 1) — read-only per-point details.
+// Opened by double-clicking a datapoint. Reads the server-resolved
+// chartData.point_inspection map (keyed by datapoint id): provenance +
+// point-in-time dose + value/date. No writes, no save controls (Phase 1).
+// ───────────────────────────────────────────────────────────────
+const PointInspectionPanel = {
+  _inspection: {},
+  _loadedAt: null,
+  _isInitialized: false,
+  _visible: false,
+
+  init(inspectionMap) {
+    this._inspection = inspectionMap || {};
+    this._isInitialized = true;
+    this._loadedAt = new Date().toISOString();
+    DiagnosticsPanel.recordTimestamp('PointInspectionPanel.init', this._loadedAt);
+  },
+
+  // Open for a double-clicked datapoint datum (carries .id).
+  show(datum) {
+    if (!this._isInitialized) this.init(this._inspection);
+    const id = (datum && datum.id != null) ? String(datum.id) : null;
+    const info = (id && this._inspection[id]) || null;
+    this.render(info, datum);
+  },
+
+  _row(dl, label, value) {
+    const dt = document.createElement('dt');
+    dt.textContent = label;
+    const dd = document.createElement('dd');
+    dd.textContent = value;   // textContent — never innerHTML — so medication
+    dl.appendChild(dt);       // display text can't inject markup.
+    dl.appendChild(dd);
+  },
+
+  render(info, datum) {
+    this._loadedAt = new Date().toISOString();
+    const panel = document.getElementById('cm-point-panel');
+    if (!panel) return;
+
+    // Prefer server-resolved inspection; fall back to the datum for value/date so
+    // the panel still renders if the map is absent (graceful degradation).
+    const weight = info ? info.value_lbs : (datum ? datum.value_lbs : null);
+    const dateLabel = (info ? info.date_label : (datum ? datum.date_label : '')) || '—';
+    const unit = (info && info.unit) || 'lb';
+    const provenance = (info && info.provenance) || 'Unknown source';
+    const dose = info ? info.dose_at_time : null;
+    const weightText = (weight == null) ? '—' : `${(+weight).toFixed(1)} ${unit}`;
+    let doseText;
+    if (dose) {
+      const drug = dose.drug || dose.agent || 'GLP-1';
+      doseText = dose.dose ? `${drug} — ${dose.dose}` : drug;
+    } else {
+      doseText = 'No dose on record';
+    }
+
+    panel.textContent = '';
+    const head = document.createElement('div');
+    head.className = 'cm-point-head';
+    const title = document.createElement('strong');
+    title.textContent = 'Measurement details';
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'cm-point-close';
+    closeBtn.setAttribute('aria-label', 'Close');
+    closeBtn.textContent = '×';
+    closeBtn.addEventListener('click', () => this.close());
+    head.appendChild(title);
+    head.appendChild(closeBtn);
+    panel.appendChild(head);
+
+    const dl = document.createElement('dl');
+    dl.className = 'cm-point-dl';
+    this._row(dl, 'Weight', weightText);
+    this._row(dl, 'Date', dateLabel);
+    this._row(dl, 'Data provenance', provenance);
+    this._row(dl, 'Dose at this date', doseText);
+    panel.appendChild(dl);
+
+    panel.style.display = 'block';
+    this._visible = true;
+    DiagnosticsPanel.recordTimestamp('PointInspectionPanel.render', this._loadedAt);
+  },
+
+  refresh() {
+    // Event-driven panel — nothing to re-render until the next double-click.
+    console.log('[PointInspectionPanel] refresh() — double-click a point to view details');
+  },
+
+  close() {
+    const panel = document.getElementById('cm-point-panel');
+    if (panel) { panel.style.display = 'none'; panel.textContent = ''; }
+    this._visible = false;
+  },
+
+  destroy() {
+    this.close();
+    this._inspection = {};
+    this._isInitialized = false;
+  },
+};
+
 document.addEventListener('DOMContentLoaded', () => {
   const chartData = JSON.parse('{{ chart_data_json|escapejs }}');
 
@@ -1309,6 +1434,7 @@ document.addEventListener('DOMContentLoaded', () => {
   DataPointLayer.render();
   AnnotationLayer.render();
   TooltipManager.init(chartData.datapoints);
+  PointInspectionPanel.init(chartData.point_inspection);
   DataPointLayer.animateIn();
 
   // Export / print pipeline (v0.3.0). window.print() prints only this
@@ -1329,6 +1455,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('keydown', (e) => {
     if (e.shiftKey && (e.key === 'D' || e.key === 'd')) DiagnosticsPanel.toggle();
     else if (e.key === 'Escape' && DiagnosticsPanel._visible) DiagnosticsPanel.close();
+    else if (e.key === 'Escape' && PointInspectionPanel._visible) PointInspectionPanel.close();
   });
   const logClose = document.getElementById('cm-log-close-btn');
   if (logClose) logClose.addEventListener('click', () => DiagnosticsPanel.close());

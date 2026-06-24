@@ -45,6 +45,23 @@ from canvas_sdk.v1.data import (
 )
 from canvas_sdk.v1.data.note import NoteTypeCategories
 
+# Phase 1 sibling modules. In the Canvas sandbox the plugin package is the
+# manifest name, so siblings import via the absolute plugin-package path — the
+# pattern deployed plugins use (cf. assistant `from assistant.chat_tools...`,
+# clinical_pathways `from clinical_pathways.handlers...`). Relative (`from .x`)
+# and bare (`from x`) imports have NO deployed precedent and the bare form is
+# sandbox-rejected (ALLOWED_MODULES). The except branch covers pytest, where the
+# plugin root is on sys.path and the top package is `protocols`.
+try:
+    from cardiometabolic_tracker.protocols.provenance import derive_provenance
+    from cardiometabolic_tracker.protocols.dose_at_time import (
+        dose_covering_date,
+        load_glp1_medication_periods,
+    )
+except ImportError:  # pytest layout: top package is `protocols`
+    from protocols.provenance import derive_provenance
+    from protocols.dose_at_time import dose_covering_date, load_glp1_medication_periods
+
 try:
     # Canvas sandbox provides the runtime logger.
     from logger import log
@@ -1963,6 +1980,35 @@ def validate_baseline_form(form: dict, *, is_correction: bool) -> tuple[list[str
     return errors, needs_confirm
 
 
+def build_point_inspection(
+    datapoints: list[dict],
+    notes_by_id: dict,
+    medication_periods: list[dict],
+    manual_metadata: object | None = None,
+) -> dict:
+    """Phase 1 per-point inspection map: ``str(datapoint id) -> inspection dict``.
+
+    Kept as a PARALLEL structure — never merged into the datapoint dicts — so the
+    v0.5 datapoint shape stays byte-identical for the regression suites. The panel
+    resolves a double-clicked point by its id.
+
+    No N+1: ``medication_periods`` is loaded once by the caller and ``notes_by_id``
+    is the already-batch-loaded note map; both lookups are O(1)/pure per point.
+    """
+    inspection: dict = {}
+    for dp in datapoints:
+        note_id = dp.get("raw", {}).get("canvas_note_id")
+        note = notes_by_id.get(str(note_id)) if note_id is not None else None
+        inspection[str(dp.get("id"))] = {
+            "provenance": derive_provenance(note=note, metadata=manual_metadata),
+            "dose_at_time": dose_covering_date(medication_periods, dp.get("date_obj")),
+            "value_lbs": dp.get("value_lbs"),
+            "date_label": dp.get("date_label"),
+            "unit": DISPLAY_UNIT,
+        }
+    return inspection
+
+
 def assemble_template_context(
     patient: dict,
     baseline: dict,
@@ -1975,6 +2021,7 @@ def assemble_template_context(
     mode: str = "legacy",
     manual_baseline: dict | None = None,
     discrepancy_notice: str | None = None,
+    point_inspection: dict | None = None,
 ) -> dict:
     """Assemble the final context for render_to_string().
 
@@ -2052,6 +2099,9 @@ def assemble_template_context(
         "mode": mode,
         "manual_baseline": manual_baseline,
         "discrepancy_notice": discrepancy_notice,
+        # Phase 1 (v0.6.0) per-point inspection map (str id -> provenance/dose).
+        # Default {} keeps every legacy/test call site byte-identical.
+        "point_inspection": point_inspection or {},
         "export_summary": build_export_summary(
             patient=patient,
             baseline=baseline,
@@ -2205,6 +2255,24 @@ class GenerateVitalsGraphs(ActionButton):
         if not is_valid:
             return self._render_error(errors)
 
+        # 3b. Phase 1 per-point inspection (provenance + point-in-time dose).
+        # Load the GLP-1 medication periods ONCE; resolve per datapoint in Python
+        # (no N+1). Broad except mirrors _match_glp1_agents: an UNVERIFIED-field
+        # medication-model surprise must degrade (no dose shown), never crash the
+        # chart. CLI verifies the period field path live before deploy.
+        try:
+            medication_periods = load_glp1_medication_periods(patient_id, GLP1_AGENT_KEYWORDS)
+        except Exception as exc:  # degrade, never block the chart
+            log.warning(
+                "Point-in-time medication load failed for patient %s (%s); "
+                "dose-at-time unavailable",
+                patient_id, exc,
+            )
+            medication_periods = []
+        point_inspection = build_point_inspection(
+            payload["datapoints"], notes, medication_periods, manual
+        )
+
         # 4. Assemble context
         context = assemble_template_context(
             patient=patient,
@@ -2218,6 +2286,7 @@ class GenerateVitalsGraphs(ActionButton):
             mode=mode,
             manual_baseline=manual_display,
             discrepancy_notice=discrepancy,
+            point_inspection=point_inspection,
         )
 
         # 5. Render — serialize the whole context for the template's JSON.parse().
