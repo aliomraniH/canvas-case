@@ -148,3 +148,55 @@ regeneration. Full decision record in `assumptions_tests_rationale.md` E2.
 - **Reusable note:** a "no stray conversion literal" test must strip comments
   before grepping — prose that *cites* the constant value (e.g. "0.45359237 kg
   by definition") is not a stray literal. Caught on first run.
+
+## v0.6.0 — Phase 1 per-point inspection panel (deploy + live Tier-2, 2026-06-24)
+
+CLI deploy of the Web-merged build (`34fb6be5`) to `pxbuilder-aomrani`.
+Registered `cardiometabolic_tracker@0.6.0 enabled`, no manifest/load error —
+the deploy-critical intra-plugin import
+`from cardiometabolic_tracker.protocols.provenance import …` loaded clean.
+
+**Gate-1 field verification (SDK source on disk, 0.163.1 — definitive):**
+- `Medication` exposes `start_date` / `end_date` (DateTimeField) — NOT
+  `period_start`/`onset_date`/etc. `dose_at_time._PERIOD_*_ATTRS` already had
+  them in the fallback list (worked), now reordered verified-first.
+- `Medication` has NO `quantity`/`dose` field; the display dose is
+  `clinical_quantity_description` (e.g. "Wegovy 0.5 mg/0.5 mL … pen injector"),
+  with `erx_quantity` (float) / `potency_unit_code` also present. The shipped
+  build's dose resolver (`getattr(med,"quantity") or getattr(med,"dose")`)
+  always returned None → blank dose. **Fixed** (one line):
+  `clinical_quantity_description` first, then the old candidates. Verified live
+  (Margaret → Wegovy 0.5 mg, Sylvia → Zepbound 2.5 mg).
+- `Note` exposes `provider` (FK) → care-team detection works (first in
+  `_NOTE_AUTHOR_ATTRS`). NONE of `origin`/`source`/`entered_by_patient`/
+  `patient_reported` exist; `NoteTypes` has no patient-portal/self-report type
+  (closest: `data`/`ccda`, not reliable). So "Patient self-entered" has no
+  reliable live signal in 0.163.x — left as honest "Care-team/Unknown source"
+  fallback (per contract). All live fixtures classified "Care-team entry".
+
+**Mock gate:** the merged build shipped with a RED pytest gate the Web
+container couldn't run — 5 failures: 3 stale version pins (`PLUGIN_VERSION`
+code constant left at 0.5.0 while manifest bumped to 0.6.0), 1 intentional
+footer-hint copy change (added "double-click … to inspect it"), 1 guard-hook
+test-isolation defect (persistent `block_<hash>.count` at n=13 → "REPEATED
+BLOCK" not "BLOCKED"). Fixed: bumped the code constant, updated the two literal
+pins + the verbatim copy, and isolated the guard counter per call via a fresh
+`AGENT_CACHE_DIR` (engine already supports the env override). Gate now
+**259 passed / 0 skipped / 0 failed** under the canvas uv python.
+
+**Live Tier-2 (about:srcdoc, 3 fixtures — Alice/Bob/Jane placeholders are stale;
+mapped to live patients):** Margaret Okafor (rich), Sylvia Tran (tirzepatide
+past-point), Priya Raghunathan (single measurement, no med). All three: panel
+opens on double-click of a `.cm-series circle`, shows all four rows
+(Weight/Date/Data provenance/Dose at this date), closes with × and Esc; dose
+degrades to "No dose on record" for the no-med patient; 0 plugin console
+errors; Shift+D diagnostics + Export intact.
+- **Reusable note:** Playwright `.dblclick()` on an SVG datapoint across the
+  about:srcdoc boundary is unreliable; dispatch a native `MouseEvent('dblclick')`
+  on `.cm-series circle` inside `frame.evaluate` (d3 reads the bound datum from
+  `__data__`). Esc must be dispatched as a keydown INSIDE the iframe document,
+  not via `page.keyboard` (the handler is on the iframe's `document`).
+- **Untested live (honest gap):** "Unknown source"/"Patient self-entered"
+  provenance branches (no patient-portal fixtures); strict "past dose ≠ today's
+  dose" (no med-switch fixture seeded — all GLP-1 patients have one continuous
+  period).
