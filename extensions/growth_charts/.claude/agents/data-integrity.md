@@ -20,6 +20,16 @@ finding that the validator must vendor that SDK bucket — do not fall back to t
 default version silently. Use grep to gather the `file:line` evidence the tools
 point at; do not contradict a tool verdict without citing why.
 
+Degraded mode (validator OFFLINE): a failed-to-return call (connection refused,
+timeout, transport error) is different from an `unsupported_sdk_version` reply,
+which means the server is up. If the server is unreachable, do NOT abort: audit
+by eye and by grep against `CLAUDE.md` and the vendored `canvas_sdk/` reference,
+and mark each finding produced without the analyzer `"confidence": "degraded"`.
+Safety still holds without this server — the PreToolUse guard hook enforces the
+hard invariants (FHIR immutability, sandbox, ZZTEST, dev-host) locally and does
+not depend on `canvas-sdk-tools` — so degraded mode lowers confidence, never
+safety. Only an analyzer verdict that actually returned is `"authoritative"`.
+
 Invariants to check (non-exhaustive — read `CLAUDE.md`):
 - FHIR Observations are Create/Read/Search only — **no PATCH/DELETE**.
 - `canvas_sdk.v1.data` models are **read-only**; all writes are typed Effects
@@ -37,7 +47,7 @@ Return ONLY a JSON array:
 
 ```json
 [{"invariant": "...", "violated": true, "evidence": "file:line or symbol",
-  "fix": "the concrete change"}]
+  "fix": "the concrete change", "confidence": "authoritative|degraded"}]
 ```
 
 Provide evidence, never assertions. Then request a GPT-5.4 second opinion and
