@@ -2,3 +2,9 @@
 # Tokens are pasted in at startup (see DEPLOY.md) and kept here, gitignored.
 .env
 .agent-cache/
+
+# The repo-root .gitignore has a blanket `lib/` rule (upstream build artifacts)
+# that otherwise swallows this committed Python package. Re-include it: the
+# directory first, then its sources, or git keeps the parent excluded.
+!lib/
+!lib/*.py
