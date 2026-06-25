@@ -13,6 +13,25 @@ install them on any machine.
 | [`deploy-report`](deploy-report/SKILL.md) | run at DEPLOY CLOSE | Self-contained HTML release report into `../deploy_reports/`. |
 | [`toolbox-review`](toolbox-review/SKILL.md) | `/toolbox-review`, or when `../TOOLBOX.md`'s "Last reviewed" date is >30 days old | Periodic audit of the toolbox index, test suites, skill drift, and stale environment facts. |
 
+## Memory namespace (canonical — read this before any `mcp-assist-memory` call)
+
+Every surface — **Web (plan), CLI (build), Desktop (review)** — MUST use the
+**same** `mcp-assist-memory` namespace, or sessions drift apart and can't see
+each other's state (this happened: CLI/Desktop wrote `canvas-case`, Web wrote
+`canvas-glp1`).
+
+- **The namespace is `canvas-case`.** Single source of truth:
+  `extensions/growth_charts/.claude/agent.config.json` → `memory_namespace`.
+  Read it from there; **never hard-code or guess** a namespace string, and never
+  substitute the plugin name or some other label.
+- **One shared namespace for the whole `canvas-case` monorepo** (decision
+  2026-06-25). Plugins inside the repo self-scope by **key prefix**, not by
+  namespace — e.g. `coord/cardiometabolic_tracker/…`, `knowledge/…`,
+  `summary:{patient_ref}`. Keys carry **references/ids only — never PHI, never
+  Canvas-specific terms in the schema** (Tier-1 reusability contract).
+- Rationale + trade-off: see [`../../reusability_contract.md`](../../reusability_contract.md)
+  ("Data separation: namespace is the tenant boundary").
+
 ## Installing
 
 Copy a skill directory into your local Claude Code skills folder:

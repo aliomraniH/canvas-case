@@ -16,6 +16,10 @@ description: >
 
 # Debug Capture Skill
 
+> **Memory namespace:** any `mcp-assist-memory` write from a capture session uses
+> the namespace from `agent.config.json:memory_namespace` (**`canvas-case`**) —
+> never a guessed string. See `extensions/skills/README.md` → "Memory namespace".
+
 A general-purpose browser debugging and visual testing framework.
 Every session is self-contained, timestamped, and structured for reuse
 by Claude Code, Claude.ai, and future autonomous agents.
