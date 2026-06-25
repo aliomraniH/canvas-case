@@ -16,11 +16,16 @@ signals that DO exist:
   * the linked Note's author/origin (care-team vs patient-reported), and
   * the v0.5.0 provider-entered manual-baseline metadata (``enrolled_by``).
 
-The exact Note attribute names below are CANDIDATES pending CLI live-verify
-(see the Phase 1 deploy checklist). They are centralized as module constants so
-a live correction is a one-line edit. Until verified, real fixture points that
-expose no clear signal classify as "Unknown source" — the honest, non-fabricated
-outcome rather than a guessed label.
+CLI-VERIFIED (v0.6.0 deploy, 2026-06-24) against live SDK 0.163.1
+(canvas_sdk/v1/data/note.py): the ``Note`` model exposes ``provider`` (FK) — it
+leads ``_NOTE_AUTHOR_ATTRS`` and drives the "Care-team entry" branch. NONE of
+``origin`` / ``source`` / ``entered_by_patient`` / ``patient_reported`` exist,
+and ``note_type`` (a ``NoteTypes`` choice) carries no patient-portal/self-report
+value — so "Patient self-entered" has no reliable live signal in 0.163.x, and a
+point with no care-team author classifies "Unknown source" (the honest,
+non-fabricated fallback rather than a guessed label). The trailing tuple names
+are kept as forward-compat fallbacks; the constants stay centralized so any
+future correction is a one-line edit.
 """
 
 from __future__ import annotations
@@ -31,8 +36,10 @@ PROVENANCE_SELF_ENTERED = "Patient self-entered"
 PROVENANCE_CARE_TEAM = "Care-team entry"
 PROVENANCE_UNKNOWN = "Unknown source"
 
-# Candidate SDK attribute names — pending CLI live-verify against 0.163.x.
-# Centralized so a live correction is a single edit, not a code hunt.
+# SDK attribute names. CLI-verified against live SDK 0.163.1 (v0.6.0): Note
+# exposes `provider` (leads _NOTE_AUTHOR_ATTRS); none of the _NOTE_ORIGIN_ATTRS
+# exist live, so they are forward-compat only. Centralized so any future
+# correction is a single edit, not a code hunt.
 _DEVICE_HINT_ATTRS = ("device", "device_id")  # absent in 0.163.x; forward-compat
 _NOTE_AUTHOR_ATTRS = ("provider", "author", "practitioner", "created_by")
 _NOTE_ORIGIN_ATTRS = ("origin", "source", "entered_by_patient", "patient_reported")
