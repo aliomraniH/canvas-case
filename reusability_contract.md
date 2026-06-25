@@ -22,10 +22,11 @@
 
 ## Data separation: namespace is the tenant boundary
 
-- **One project namespace per project** (`canvas-glp1`), with conventional sub-scopes by key prefix: `coord/…`, `knowledge/…`, `session/…`. Other projects (`acme-billing`, …) get their own namespace and never see Canvas data.
+- **One namespace per repo** (`canvas-case`), with conventional sub-scopes by key prefix: `coord/…`, `knowledge/…`, `session/…`. Other repos/projects (`acme-billing`, …) get their own namespace and never see this repo's data. **The single source of truth is `agent.config.json:memory_namespace`** — every surface reads it; no one hard-codes or guesses a namespace string.
+  > **DECISION 2026-06-25 (user).** This boundary was originally *one namespace per **plugin*** (`canvas-glp1`). Because Web/CLI/Desktop sessions drifted (CLI/Desktop wrote to `canvas-case`, Web to `canvas-glp1`), we collapsed to **one shared namespace per repo: `canvas-case`**. Trade-off accepted: plugins **inside** this monorepo no longer get separate namespaces (they share `canvas-case` and must self-scope by key prefix, e.g. `coord/cardiometabolic_tracker/…`). Isolation vs **other** repos is unchanged.
 - **A `project` column on every coordination and knowledge table**, indexed, and **every query filters on it**. No implicit cross-project reads, ever.
-- **Honest limit:** under one shared `MCP_AUTH_TOKEN`, namespace is a *soft* boundary — any client with the token can pass any namespace. It is real isolation for honest clients, not enforced against a misbehaving one. **Durable fix = per-project tokens/roles (v2 auth):** a token scoped to `canvas-glp1` can't touch `acme-billing`. Put this on the v2 roadmap now.
-- **Tests use a neutral project** (`proj-test`), never `canvas-glp1`.
+- **Honest limit:** under one shared `MCP_AUTH_TOKEN`, namespace is a *soft* boundary — any client with the token can pass any namespace. It is real isolation for honest clients, not enforced against a misbehaving one. **Durable fix = per-namespace tokens/roles (v2 auth):** a token scoped to `canvas-case` can't touch `acme-billing`. Put this on the v2 roadmap now.
+- **Tests use a neutral project** (`proj-test`), never `canvas-case`.
 
 ---
 

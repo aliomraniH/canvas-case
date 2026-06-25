@@ -5,6 +5,11 @@ description: Generate a polished, self-contained HTML deployment report artifact
 
 # Deploy Report
 
+> **Memory namespace:** the deploy handoff/breadcrumb written to
+> `mcp-assist-memory` at deploy close uses the namespace from
+> `agent.config.json:memory_namespace` (**`canvas-case`**) — never a guessed
+> string. See `extensions/skills/README.md` → "Memory namespace".
+
 Produces one self-contained HTML artifact per deployment that tells the story
 of the release: what shipped, what it looks like, what broke and was fixed,
 what was learned, and what's queued for the next version.

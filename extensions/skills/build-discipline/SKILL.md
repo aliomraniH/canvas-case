@@ -77,6 +77,15 @@ changes from 0.163.1):
   or move files unless the task explicitly says to. Sub-agents inherit this:
   include "do not restructure the package layout" in every deploy/sub-agent
   delegation.
+- **Memory namespace (hard rule):** every `mcp-assist-memory` call uses the
+  namespace from `agent.config.json:memory_namespace` — currently **`canvas-case`**
+  (one shared namespace for the whole repo; decision 2026-06-25). **Never guess,
+  hard-code, or substitute** a namespace (don't use the plugin name, an instance
+  name, or a personal label) — guessing splits state across surfaces so Web/CLI/
+  Desktop stop seeing each other (this incident: CLI/Desktop on `canvas-case`,
+  Web on `canvas-glp1`). Scope within the namespace by **key prefix**
+  (`coord/…`, `knowledge/…`, `summary:{patient_ref}`); keys hold ids/refs only,
+  never PHI. Full rationale: `extensions/skills/README.md` + `reusability_contract.md`.
 - **Destructive or irreversible actions** (FHIR POST to non-ZZTEST resources,
   force-push, file deletion outside the plan, anything the registry marks
   permanent): name the action and its irreversibility to the user and wait for

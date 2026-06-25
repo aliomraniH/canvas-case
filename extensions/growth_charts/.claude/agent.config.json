@@ -1,9 +1,9 @@
 {
-  "$comment": "TIER 3 — Canvas project pack. The ONLY place the project namespace lives. Swap this + CLAUDE.md + rules/guards.rules + .mcp.json to reuse the Tier-2 machinery in another project. lib/config.py is the sole reader; the literal project name must not appear under lib/, hooks/, or agents/.",
-  "project": "canvas-glp1",
+  "$comment": "TIER 3 — Canvas project pack. The ONLY place the project namespace lives; lib/config.py is the sole reader. memory_namespace is the SINGLE SOURCE OF TRUTH for the mcp-assist-memory namespace — every surface (Web/CLI/Desktop) MUST read it here and never guess a string. DECISION 2026-06-25 (user): this canvas-case monorepo uses ONE shared namespace `canvas-case` so Web/CLI/Desktop sessions don't drift apart. Trade-off accepted: per-plugin isolation within the repo is given up (all repo plugins share this namespace); per-project isolation vs OTHER repos still holds via this value. The literal project name must not appear under lib/, hooks/, or agents/.",
+  "project": "canvas-case",
   "claude_md": "../../../CLAUDE.md",
   "guards_rules": "rules/guards.rules",
-  "memory_namespace": "canvas-glp1",
+  "memory_namespace": "canvas-case",
   "key_scopes": {
     "coord": "coord/",
     "knowledge": "knowledge/",
