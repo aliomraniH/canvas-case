@@ -294,7 +294,7 @@ class TestDeClinicalizedCopy(V04TestCase):
     """D3: no 'diagnostics' in user-facing strings; replacement copy pinned
     verbatim (L4), like SCALE_BOUNDS_DISCLOSURE."""
 
-    FOOTER_HINT = "Hover a point for details. Press Shift+D for technical log."
+    FOOTER_HINT = "Hover a point for details; double-click a point to inspect it. Press Shift+D for technical log."
     PANEL_HEADER = "Plugin event log — technical support only. Not for clinical use."
 
     def test_footer_hint_pinned_verbatim(self):

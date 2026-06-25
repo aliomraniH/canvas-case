@@ -770,12 +770,12 @@ class TestCopyPinsAndDialog(V05TestCase):
 
 
 class TestVersionPairing050(V05TestCase):
-    def test_version_is_0_5_0_everywhere(self):
+    def test_version_is_0_6_0_everywhere(self):
         manifest = json.loads(
             (REPO_ROOT / "CANVAS_MANIFEST.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(PLUGIN_VERSION, "0.5.0")
-        self.assertEqual(manifest["plugin_version"], "0.5.0")
+        self.assertEqual(PLUGIN_VERSION, "0.6.0")
+        self.assertEqual(manifest["plugin_version"], "0.6.0")
 
     def test_manifest_registers_api_handler(self):
         manifest = json.loads(

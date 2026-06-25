@@ -78,7 +78,7 @@ PROCESSING_VERSION = "1.0"
 # Must match CANVAS_MANIFEST.json's plugin_version — the version-pairing tests
 # (TestV03Export.test_plugin_version_matches_manifest and the v0.4/v0.5 suites)
 # enforce the pairing so the two cannot drift.
-PLUGIN_VERSION = "0.5.0"
+PLUGIN_VERSION = "0.6.0"
 
 # The one modal surface this plugin launches into. Single source for the
 # handler's LaunchModalEffect calls AND the support report's launch_target

@@ -14,13 +14,14 @@ Design:
     already-loaded period list and carries the spec's four cases (covers / before
     any dose / gap between doses / multiple overlapping -> most recent).
 
-UNVERIFIED (Bundle A decision, this session): the Medication coverage-period
-field path is NOT confirmed against live SDK 0.163.x. The deployed code only
-ever used ``.active()`` and deliberately avoided effective dates (unreliable on
-seeded data). The candidate period attribute names below are centralized for a
-one-line CLI correction; the Phase 1 deploy checklist hands CLI the live-verify.
-A medication whose period attrs are all absent is treated as open-ended (covers
-any date) so the feature degrades to "current dose" rather than crashing.
+CLI-VERIFIED (v0.6.0 deploy, 2026-06-24) against live SDK 0.163.1
+(canvas_sdk/v1/data/medication.py): the ``Medication`` model exposes
+``start_date`` / ``end_date`` (period bounds) and ``clinical_quantity_description``
+(display dose). It has NO ``period_start`` / ``quantity`` / ``dose`` field. The
+attribute tuples below now lead with the verified names and keep the original
+candidates as forward-compat fallbacks. A medication whose period attrs are all
+absent is treated as open-ended (covers any date) so the feature degrades to
+"current dose" rather than crashing.
 """
 
 from __future__ import annotations
@@ -29,9 +30,10 @@ from __future__ import annotations
 # and `__name__`. This module is pure/data-returning; the handler owns logging
 # (it wraps the loader call and logs degraded states).
 
-# Candidate Medication coverage-period attribute names — pending CLI live-verify.
-_PERIOD_START_ATTRS = ("period_start", "start_date", "effective_start", "onset_date")
-_PERIOD_END_ATTRS = ("period_end", "end_date", "effective_end", "stop_date")
+# Medication coverage-period attribute names. CLI-verified against live SDK
+# 0.163.1: the model exposes `start_date` / `end_date`; the rest are forward-compat.
+_PERIOD_START_ATTRS = ("start_date", "period_start", "effective_start", "onset_date")
+_PERIOD_END_ATTRS = ("end_date", "period_end", "effective_end", "stop_date")
 
 
 def _strip_tz(dt: object) -> object:
@@ -96,7 +98,11 @@ def load_glp1_medication_periods(patient_id: str, agent_keywords: dict) -> list[
             {
                 "agent": agent,
                 "drug": display_texts[0] if display_texts else agent,
-                "dose": getattr(med, "quantity", None) or getattr(med, "dose", None),
+                "dose": (
+                    getattr(med, "clinical_quantity_description", None)
+                    or getattr(med, "quantity", None)
+                    or getattr(med, "dose", None)
+                ),
                 "start": _first_attr(med, _PERIOD_START_ATTRS),
                 "end": _first_attr(med, _PERIOD_END_ATTRS),
                 "source_id": getattr(med, "id", None),

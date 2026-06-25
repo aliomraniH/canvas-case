@@ -15,8 +15,10 @@ The contract these tests lock in:
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -40,11 +42,16 @@ pytestmark = pytest.mark.skipif(
 
 
 def _run(argv: list[str], payload: dict) -> subprocess.CompletedProcess[str]:
+    # Isolate the engine's persistent repeat-counter (block_<hash>.count) per call
+    # via a fresh AGENT_CACHE_DIR, so a block test sees a first-time "BLOCKED" and
+    # not an escalated "REPEATED BLOCK (n=…)" inherited from prior sessions/runs.
+    env = {**os.environ, "AGENT_CACHE_DIR": tempfile.mkdtemp(prefix="guard_attempts_")}
     return subprocess.run(
         argv,
         input=json.dumps(payload),
         capture_output=True,
         text=True,
+        env=env,
     )
 
 
