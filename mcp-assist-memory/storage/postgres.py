@@ -8,10 +8,13 @@ writes: a duplicate is a no-op that returns the already-applied revision.
 """
 from __future__ import annotations
 
+import asyncio
+import functools
 import hashlib
 import uuid
 from typing import Any
 
+from psycopg import OperationalError
 from psycopg import errors as pg_errors
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
@@ -21,6 +24,31 @@ from storage.sanitize import sanitize, wrap_value
 
 HANDOFF_NS = "handoff"
 _MAX_RETRIES = 3
+
+# A backend killed under us (Neon/PgBouncer autosuspend or recycle) surfaces as
+# AdminShutdown ("terminating connection due to administrator command") or a
+# generic connection drop. The pool's check= discards dead conns at checkout;
+# this retry covers a backend that dies mid-statement.
+_READ_RETRIES = 3
+_RETRYABLE = (pg_errors.AdminShutdown, pg_errors.ConnectionException, OperationalError)
+
+
+def _retry_reads(fn):
+    """Retry an idempotent read on transient connection loss (exp backoff)."""
+
+    @functools.wraps(fn)
+    async def wrapper(self, *args, **kwargs):
+        delay = 0.1
+        for attempt in range(_READ_RETRIES):
+            try:
+                return await fn(self, *args, **kwargs)
+            except _RETRYABLE:
+                if attempt == _READ_RETRIES - 1:
+                    raise
+                await asyncio.sleep(delay)
+                delay *= 2
+
+    return wrapper
 
 
 def _row_to_entry(row: dict, *, wrap: bool = True) -> dict:
@@ -100,6 +128,7 @@ class PostgresBackend(StorageBackend):
     ) -> dict:
         return await self._append(namespace, key, value, kind, tags, source_surface, event_id, False)
 
+    @_retry_reads
     async def memory_get(self, namespace, key) -> dict | None:
         async with self.pool.connection() as conn:
             conn.row_factory = dict_row
@@ -112,6 +141,7 @@ class PostgresBackend(StorageBackend):
             return None
         return _row_to_entry(row)
 
+    @_retry_reads
     async def memory_list(self, namespace, *, kind=None, tag=None, limit=100) -> list[dict]:
         clauses = ["namespace = %s"]
         params: list[Any] = [namespace]
@@ -137,6 +167,7 @@ class PostgresBackend(StorageBackend):
         live = [_row_to_entry(r) for r in rows if not r["tombstone"]]
         return live[:limit]
 
+    @_retry_reads
     async def memory_history(self, namespace, key, *, limit=50) -> list[dict]:
         async with self.pool.connection() as conn:
             conn.row_factory = dict_row
@@ -162,9 +193,16 @@ class PostgresBackend(StorageBackend):
         kind = latest["kind"] if latest else "note"
         return await self._append(namespace, key, {"deleted": True}, kind, [], source_surface, event_id, True)
 
+    @_retry_reads
     async def memory_search(self, query, *, namespace=None, limit=20) -> list[dict]:
-        clauses = ["value::text ILIKE %s"]
-        params: list[Any] = [f"%{query}%"]
+        # Whitespace-tokenize and AND the tokens so an out-of-order, multi-word
+        # query matches (each token must appear somewhere in the value); a single
+        # contiguous ILIKE would miss "beta alpha" against "alpha beta".
+        tokens = query.split()
+        if not tokens:
+            return []
+        clauses = ["value::text ILIKE %s" for _ in tokens]
+        params: list[Any] = [f"%{t}%" for t in tokens]
         if namespace:
             clauses.append("namespace = %s")
             params.append(namespace)
@@ -241,6 +279,7 @@ class PostgresBackend(StorageBackend):
                 continue
         raise last_exc
 
+    @_retry_reads
     async def session_get(self, session_id) -> dict | None:
         async with self.pool.connection() as conn:
             conn.row_factory = dict_row
@@ -255,6 +294,7 @@ class PostgresBackend(StorageBackend):
             "created_at": row["created_at"].isoformat(),
         }
 
+    @_retry_reads
     async def session_list(self, *, limit=50) -> list[dict]:
         async with self.pool.connection() as conn:
             conn.row_factory = dict_row
@@ -272,6 +312,7 @@ class PostgresBackend(StorageBackend):
             for r in rows
         ]
 
+    @_retry_reads
     async def session_events(self, session_id, *, limit=200) -> list[dict]:
         async with self.pool.connection() as conn:
             conn.row_factory = dict_row
@@ -310,6 +351,7 @@ class PostgresBackend(StorageBackend):
             inserted = await cur.fetchone()
         return {"sha256": sha, "size": size, "content_type": content_type, "deduped": inserted is None}
 
+    @_retry_reads
     async def artifact_get(self, sha256) -> dict | None:
         async with self.pool.connection() as conn:
             conn.row_factory = dict_row
@@ -327,6 +369,7 @@ class PostgresBackend(StorageBackend):
             "created_at": row["created_at"].isoformat(),
         }
 
+    @_retry_reads
     async def artifact_read_range(self, sha256, offset: int, length: int) -> bytes | None:
         # Ranged read keeps peak memory to one window, never the whole blob.
         async with self.pool.connection() as conn:
@@ -340,6 +383,7 @@ class PostgresBackend(StorageBackend):
         chunk = row[0]
         return bytes(chunk) if chunk is not None else b""
 
+    @_retry_reads
     async def artifact_list(self, *, limit=100) -> list[dict]:
         async with self.pool.connection() as conn:
             conn.row_factory = dict_row
@@ -359,6 +403,7 @@ class PostgresBackend(StorageBackend):
         ]
 
     # ------------------------------------------------------------------ admin
+    @_retry_reads
     async def stats(self) -> dict:
         async with self.pool.connection() as conn:
             conn.row_factory = dict_row

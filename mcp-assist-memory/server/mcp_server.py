@@ -91,7 +91,8 @@ async def memory_delete(
 
 @mcp.tool
 async def memory_search(query: str, namespace: str | None = None, limit: int = 20) -> list[dict]:
-    """Substring search over memory values (pgvector semantic recall arrives in Phase 3)."""
+    """Token substring search over memory values: the query is whitespace-split and
+    every token must appear (order-independent). pgvector semantic recall arrives in Phase 3."""
     return await _backend().memory_search(query, namespace=namespace, limit=limit)
 
 

@@ -41,6 +41,7 @@ def _build_pool() -> AsyncConnectionPool:
         timeout=settings.pool_timeout,                 # caller checkout cap
         reconnect_timeout=settings.pool_reconnect_timeout,
         max_idle=settings.pool_max_idle,
+        check=AsyncConnectionPool.check_connection,    # validate (discard dead) conns at checkout
         num_workers=1,
         kwargs={
             "connect_timeout": settings.db_connect_timeout,
